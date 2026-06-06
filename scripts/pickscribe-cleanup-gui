@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+LOADER="${PICKSCRIBE_ENV_LOADER:-$HOME/.local/bin/pickscribe-env.sh}"
+if [[ ! -f "$LOADER" ]]; then
+  LOADER="$SCRIPT_DIR/pickscribe-env.sh"
+fi
+# shellcheck source=scripts/pickscribe-env.sh
+source "$LOADER"
+exec "$HOME/.local/bin/pickscribe-cleanup" "$@"

@@ -1,0 +1,22 @@
+[package]
+name = "pickscribe"
+version = "0.1.0"
+edition = "2024"
+description = "PickScribe by Pickforge: local Linux dictation with AI cleanup and paste"
+license = "MIT"
+repository = "https://github.com/pickforge/ai-linux-whisper"
+
+[[bin]]
+name = "pickscribe-cleanup"
+path = "src/bin/pickscribe-cleanup.rs"
+
+[[bin]]
+name = "pickscribe"
+path = "src/bin/pickscribe.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

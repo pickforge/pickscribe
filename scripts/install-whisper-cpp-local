@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SRC="${PICKSCRIBE_WHISPER_CPP_SRC:-${WHISPER_CPP_SRC:-$HOME/.local/src/whisper.cpp}}"
+BUILD="$SRC/build"
+BIN_DIR="$HOME/.local/bin"
+MODEL_DIR="${PICKSCRIBE_WHISPER_MODEL_DIR:-${PICKSCRIBE_MODEL_DIR:-$HOME/.local/share/whisper.cpp/models}}"
+MODEL_NAME="${PICKSCRIBE_WHISPER_MODEL_NAME:-${PICKSCRIBE_MODEL_NAME:-base}}"
+MODEL_PATH="$MODEL_DIR/ggml-$MODEL_NAME.bin"
+ENV_FILE="${PICKSCRIBE_ENV_FILE:-$HOME/.config/pickscribe/env}"
+
+mkdir -p "$HOME/.local/src" "$BIN_DIR" "$MODEL_DIR" "$(dirname "$ENV_FILE")"
+
+if [[ ! -d "$SRC/.git" ]]; then
+  git clone --depth 1 https://github.com/ggml-org/whisper.cpp.git "$SRC"
+else
+  git -C "$SRC" pull --ff-only
+fi
+
+cmake -S "$SRC" -B "$BUILD" -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DWHISPER_BUILD_TESTS=OFF \
+  -DWHISPER_BUILD_EXAMPLES=ON
+
+cmake --build "$BUILD" --config Release --parallel "$(nproc)"
+
+if [[ -x "$BUILD/bin/whisper-cli" ]]; then
+  ln -sf "$BUILD/bin/whisper-cli" "$BIN_DIR/whisper-cli"
+elif [[ -x "$BUILD/bin/main" ]]; then
+  ln -sf "$BUILD/bin/main" "$BIN_DIR/whisper-cli"
+else
+  echo "No whisper CLI binary found under $BUILD/bin" >&2
+  exit 1
+fi
+
+if [[ ! -s "$MODEL_PATH" ]]; then
+  bash "$SRC/models/download-ggml-model.sh" "$MODEL_NAME" "$MODEL_DIR"
+fi
+
+chmod 700 "$(dirname "$ENV_FILE")"
+touch "$ENV_FILE"
+chmod 600 "$ENV_FILE"
+
+tmp=$(mktemp)
+grep -vE '^(export )?PICKSCRIBE_(LANGUAGE|WHISPER_MODEL|WHISPER_MODEL_NAME|AUTO_UPDATE_WHISPER|UPDATE_INTERVAL_HOURS|PASTE_METHOD|PASTE_CHORD|PASTE_DELAY_MS)=' "$ENV_FILE" > "$tmp" || true
+cat >> "$tmp" <<EOF
+PICKSCRIBE_LANGUAGE="auto"
+PICKSCRIBE_WHISPER_MODEL="$MODEL_PATH"
+PICKSCRIBE_WHISPER_MODEL_NAME="$MODEL_NAME"
+PICKSCRIBE_AUTO_UPDATE_WHISPER="check"
+PICKSCRIBE_UPDATE_INTERVAL_HOURS="168"
+PICKSCRIBE_PASTE_METHOD="hotkey"
+PICKSCRIBE_PASTE_CHORD="ctrl-v"
+PICKSCRIBE_PASTE_DELAY_MS="250"
+EOF
+mv "$tmp" "$ENV_FILE"
+chmod 600 "$ENV_FILE"
+
+cat <<EOF
+Installed whisper.cpp CLI: $BIN_DIR/whisper-cli
+Installed Whisper model:  $MODEL_PATH
+Updated env file:         $ENV_FILE
+
+Test with:
+  pickscribe-gui start --no-notify
+  # speak
+  pickscribe-gui stop --stdout-only --no-notify
+EOF
