@@ -47,7 +47,7 @@ Build and install PickScribe:
 cargo build --release --bins
 mkdir -p ~/.local/bin
 cp target/release/pickscribe target/release/pickscribe-cleanup ~/.local/bin/
-cp scripts/pickscribe-env.sh scripts/pickscribe-gui scripts/pickscribe-cleanup-gui ~/.local/bin/
+cp scripts/pickscribe-env.sh scripts/pickscribe-gui scripts/pickscribe-terminal-gui scripts/pickscribe-cleanup-gui ~/.local/bin/
 cp scripts/voice-flow scripts/voice-cleanup scripts/voice-flow-gui scripts/voice-cleanup-gui scripts/install-whisper-cpp-local ~/.local/bin/
 chmod +x ~/.local/bin/pickscribe* ~/.local/bin/voice-flow ~/.local/bin/voice-cleanup ~/.local/bin/voice-flow-gui ~/.local/bin/voice-cleanup-gui ~/.local/bin/install-whisper-cpp-local
 ```
@@ -181,16 +181,16 @@ PickScribe defaults to `Ctrl+V` because normal text fields are the main target:
 PICKSCRIBE_PASTE_CHORD="ctrl-v"
 ```
 
-For terminal-focused dictation, either temporarily run:
+For terminal-focused dictation, create a second KDE shortcut named `PickScribe Terminal` with this command:
+
+```bash
+/home/dev/.local/bin/pickscribe-terminal-gui
+```
+
+You can also temporarily run:
 
 ```bash
 PICKSCRIBE_PASTE_CHORD="ctrl-shift-v" pickscribe-gui
-```
-
-or create a second KDE shortcut named `PickScribe Terminal` with this command:
-
-```bash
-bash -lc 'PICKSCRIBE_PASTE_CHORD="ctrl-shift-v" /home/dev/.local/bin/pickscribe-gui'
 ```
 
 Automatic terminal detection is planned, but KDE/Wayland does not expose the active native window class through simple `xdotool` in this setup.

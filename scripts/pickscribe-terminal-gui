@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+LOADER="${PICKSCRIBE_ENV_LOADER:-$HOME/.local/bin/pickscribe-env.sh}"
+if [[ ! -f "$LOADER" ]]; then
+  LOADER="$SCRIPT_DIR/pickscribe-env.sh"
+fi
+# shellcheck source=scripts/pickscribe-env.sh
+source "$LOADER"
+export PICKSCRIBE_PASTE_METHOD="hotkey"
+export PICKSCRIBE_PASTE_CHORD="ctrl-shift-v"
+exec "$HOME/.local/bin/pickscribe" "$@"
