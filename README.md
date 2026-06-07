@@ -1,6 +1,8 @@
 # PickScribe
 
-### Local Linux dictation with AI cleanup — by Pickforge
+### Local Linux dictation with AI cleanup — by Pickforge Studio
+
+![PickScribe brand preview](assets/branding/pickscribe-og-image.png)
 
 PickScribe is a Linux-first dictation tool that records your microphone, transcribes speech locally with `whisper.cpp`, cleans the transcript with an OpenAI-compatible LLM provider, and pastes the final text into the focused app.
 
@@ -249,6 +251,14 @@ voice-flow
 voice-cleanup
 ```
 
+## Branding
+
+Canonical PickScribe brand assets live in `assets/branding/`. The set follows the Pickforge Studio v2 system: dark canvas, off-white bracket mark, waveform motif, and ember accent.
+
+- `pickscribe-app-icon.svg` and `pickscribe-app-icon-{32,64,128,256,512,1024}.png` for package/app icons.
+- `pickscribe-tray-idle.svg`, `pickscribe-tray-recording.svg`, and PNG exports for future tray states.
+- `pickscribe-lockup-horizontal.svg`, `pickscribe-wordmark.svg`, `pickscribe-og-image.png`, and `pickscribe-hero-art.png` for docs, social cards, and marketing surfaces.
+
 ## Privacy and security
 
 - Audio transcription is local when using the bundled `whisper.cpp` flow.
@@ -272,4 +282,4 @@ See [`FULL_APP_PLAN.md`](FULL_APP_PLAN.md) for the full product plan, including:
 
 ## License
 
-MIT © 2026 Pickforge
+MIT © 2026 Pickforge Studio

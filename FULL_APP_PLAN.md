@@ -94,6 +94,7 @@ Goal: remove terminal dependence and make usage polished.
 
 Tasks:
 
+- [x] Add v2 Pickforge Studio brand assets under `assets/branding/`.
 - [ ] Add tray app or lightweight daemon.
 - [ ] Show tray state:
   - idle

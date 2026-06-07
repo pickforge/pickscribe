@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none" role="img" aria-label="PickScribe mark">
+  <title>PickScribe mark</title>
+  <rect width="128" height="128" rx="24" fill="#0A0A0B"/>
+
+  <g stroke="#F2F2F3" stroke-width="3" stroke-linecap="square" fill="none">
+    <path d="M36 52 V32 H52"/>
+    <path d="M36 76 V96 H52"/>
+    <path d="M76 32 H92 V52"/>
+    <path d="M76 96 H92 V76"/>
+  </g>
+  <g stroke="#F2F2F3" stroke-width="2" stroke-linecap="round" fill="none" opacity="0.55">
+    <line x1="58" y1="64" x2="58" y2="64"/>
+    <line x1="62" y1="58" x2="62" y2="70"/>
+    <line x1="66" y1="52" x2="66" y2="76"/>
+  </g>
+  <circle cx="86" cy="64" r="6" fill="#FF7A1A"/>
+</svg>

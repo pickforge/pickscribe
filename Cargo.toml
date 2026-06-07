@@ -2,9 +2,9 @@
 name = "pickscribe"
 version = "0.1.0"
 edition = "2024"
-description = "PickScribe by Pickforge: local Linux dictation with AI cleanup and paste"
+description = "PickScribe by Pickforge Studio: local Linux dictation with AI cleanup and paste"
 license = "MIT"
-repository = "https://github.com/pickforge/ai-linux-whisper"
+repository = "https://github.com/pickforge/pickscribe"
 
 [[bin]]
 name = "pickscribe-cleanup"

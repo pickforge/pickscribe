@@ -16,7 +16,7 @@ use std::{
 #[derive(Debug, Parser)]
 #[command(
     name = "pickscribe",
-    about = "PickScribe by Pickforge: toggle record -> local Whisper STT -> AI cleanup -> paste"
+    about = "PickScribe by Pickforge Studio: toggle record -> local Whisper STT -> AI cleanup -> paste"
 )]
 struct Args {
     /// Action to run. toggle starts recording if idle, stops/transcribes if recording.

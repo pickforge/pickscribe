@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" fill="none" role="img" aria-label="PickScribe social card">
+  <title>PickScribe social card</title>
+  <defs>
+    <radialGradient id="glow" cx="52%" cy="54%" r="58%">
+      <stop offset="0%" stop-color="#FF7A1A" stop-opacity="0.34"/>
+      <stop offset="42%" stop-color="#FF7A1A" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#FF7A1A" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="titleGradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="70%" stop-color="#F2F2F3"/>
+      <stop offset="100%" stop-color="#9A9AA1"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="#0A0A0B"/>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+  <g stroke="#F2F2F3" stroke-opacity="0.05" stroke-width="0.6">
+    <line x1="0" y1="0" x2="0" y2="630" /><line x1="100" y1="0" x2="100" y2="630" /><line x1="200" y1="0" x2="200" y2="630" /><line x1="300" y1="0" x2="300" y2="630" /><line x1="400" y1="0" x2="400" y2="630" /><line x1="500" y1="0" x2="500" y2="630" /><line x1="600" y1="0" x2="600" y2="630" /><line x1="700" y1="0" x2="700" y2="630" /><line x1="800" y1="0" x2="800" y2="630" /><line x1="900" y1="0" x2="900" y2="630" /><line x1="1000" y1="0" x2="1000" y2="630" /><line x1="1100" y1="0" x2="1100" y2="630" /><line x1="1200" y1="0" x2="1200" y2="630" /><line x1="0" y1="0" x2="1200" y2="0" /><line x1="0" y1="100" x2="1200" y2="100" /><line x1="0" y1="200" x2="1200" y2="200" /><line x1="0" y1="300" x2="1200" y2="300" /><line x1="0" y1="400" x2="1200" y2="400" /><line x1="0" y1="500" x2="1200" y2="500" /><line x1="0" y1="600" x2="1200" y2="600" />
+  </g>
+  <g transform="translate(80 80) scale(0.625)">
+    <rect width="128" height="128" rx="24" fill="#0F0F11" stroke="#F2F2F3" stroke-opacity="0.08"/>
+
+  <g stroke="#F2F2F3" stroke-width="3" stroke-linecap="square" fill="none">
+    <path d="M36 52 V32 H52"/>
+    <path d="M36 76 V96 H52"/>
+    <path d="M76 32 H92 V52"/>
+    <path d="M76 96 H92 V76"/>
+  </g>
+  <g stroke="#F2F2F3" stroke-width="2" stroke-linecap="round" fill="none" opacity="0.55">
+    <line x1="58" y1="64" x2="58" y2="64"/>
+    <line x1="62" y1="58" x2="62" y2="70"/>
+    <line x1="66" y1="52" x2="66" y2="76"/>
+  </g>
+  <circle cx="86" cy="64" r="6" fill="#FF7A1A"/>
+  </g>
+  <text x="180" y="132" font-family="Geist, Inter, Arial, sans-serif" font-size="38" font-weight="750" fill="#F2F2F3" letter-spacing="-0.02em">PickScribe</text>
+  <text x="80" y="330" font-family="Geist, Inter, Arial, sans-serif" font-size="72" font-weight="760" fill="url(#titleGradient)" letter-spacing="-0.025em">PickScribe</text>
+  <text x="80" y="410" font-family="Geist, Inter, Arial, sans-serif" font-size="46" font-weight="700" fill="#F2F2F3" fill-opacity="0.88" letter-spacing="-0.02em">Local Linux dictation with AI cleanup.</text>
+  <text x="80" y="505" font-family="Geist Mono, JetBrains Mono, monospace" font-size="19" font-weight="500" fill="#6E6E75" letter-spacing="0.18em">DICTATION · WHISPER · TRAY</text>
+  <text x="80" y="565" font-family="Geist Mono, JetBrains Mono, monospace" font-size="20" font-weight="500" fill="#FF7A1A">pickforge.dev/pickscribe</text>
+</svg>
