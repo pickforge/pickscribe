@@ -58,7 +58,7 @@ pickscribe-app --toggle
 
 The single-instance plugin forwards `--toggle` to the running app, so the same command starts the app when needed. Existing shortcuts pointing at the legacy wrappers keep working: `pickscribe-gui` and `pickscribe-terminal-gui` automatically forward to the desktop app when it is installed (the terminal variant passes `--paste-chord=ctrl-shift-v`), falling back to the CLI flow otherwise (`PICKSCRIBE_FORCE_CLI=1` forces the CLI). The CLI binaries keep working unchanged; the app reads the same `~/.config/pickscribe/env` for API keys and stores its own settings in `~/.config/pickscribe/config.toml`.
 
-On Wayland the app runs under XWayland by default so the floating button can stay always-on-top (set `PICKSCRIBE_NATIVE_WAYLAND=1` to opt out).
+On Wayland the app runs natively (smooth WebKitGTK scrolling). The floating button stays on top through a KWin window rule that PickScribe installs automatically on KDE (forcing keep-above, no-focus, and skip-taskbar for the capsule). On Wayland compositors without window rules, set `PICKSCRIBE_X11=1` to fall back to XWayland keep-above.
 
 ## Current behavior
 

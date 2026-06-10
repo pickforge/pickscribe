@@ -102,9 +102,6 @@
           class:active={view === item.id}
           onclick={() => navigate(item.id)}
         >
-          {#if item.id === "settings" && settingsDirty}
-            <span class="dirty-dot" title="Unsaved changes"></span>
-          {/if}
           {#if item.id === "dashboard"}
             <Microphone size={17} weight={view === item.id ? "fill" : "regular"} />
           {:else if item.id === "history"}
@@ -113,6 +110,9 @@
             <GearSix size={17} weight={view === item.id ? "fill" : "regular"} />
           {/if}
           {item.label}
+          {#if item.id === "settings" && settingsDirty}
+            <span class="dirty-dot" title="Unsaved changes"></span>
+          {/if}
         </button>
       {/each}
     </nav>
@@ -263,7 +263,8 @@
     border-radius: 999px;
     background: var(--ember);
     flex: none;
-    margin-left: -4px;
+    margin-left: auto;
+    margin-right: 2px;
     animation: ember-pulse 2.4s var(--ease-forge) infinite;
   }
 

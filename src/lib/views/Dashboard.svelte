@@ -289,6 +289,8 @@
     background: var(--ember);
     color: var(--surface);
     box-shadow: var(--glow-ember-strong);
+    /* Animate transform only — animating the blurred shadow repaints the
+       whole region every frame and judders scrolling in WebKitGTK. */
     animation: orb-breathe 2.4s var(--ease-forge) infinite;
   }
   .orb.busy {
@@ -301,8 +303,8 @@
   }
 
   @keyframes orb-breathe {
-    0%, 100% { box-shadow: 0 0 60px -10px rgba(255, 122, 26, 0.55); }
-    50% { box-shadow: 0 0 90px -6px rgba(255, 122, 26, 0.8); }
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.035); }
   }
 
   .spinner {

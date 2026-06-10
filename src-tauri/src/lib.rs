@@ -1,4 +1,5 @@
 mod engine;
+mod kwin;
 mod tray;
 
 use std::sync::Arc;
@@ -270,8 +271,9 @@ pub(crate) fn ensure_float_window(app: &AppHandle, visible: bool) {
     if !visible {
         return;
     }
+    kwin::ensure_float_rule();
     let window = WebviewWindowBuilder::new(app, "float", WebviewUrl::App("index.html".into()))
-        .title("PickScribe")
+        .title("PickScribe Float")
         .inner_size(
             f64::from(FLOAT_WINDOW_WIDTH),
             f64::from(FLOAT_WINDOW_HEIGHT),
