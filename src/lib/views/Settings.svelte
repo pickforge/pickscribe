@@ -6,7 +6,16 @@
   import { api, formatError, type AppConfig, type DoctorCheck } from "../api";
   import { setTheme, type ThemeSetting } from "../theme";
 
+  let {
+    onDirtyChange = () => {},
+    bindActions = () => {},
+  }: {
+    onDirtyChange?: (dirty: boolean) => void;
+    bindActions?: (actions: { save: () => Promise<boolean>; discard: () => void }) => void;
+  } = $props();
+
   let config = $state<AppConfig | null>(null);
+  let savedJson = $state("");
   let models = $state<string[]>([]);
   let cleanupModels = $state<string[]>([]);
   let modelsMessage = $state<string | null>(null);
@@ -18,8 +27,26 @@
   let error = $state<string | null>(null);
   let saving = $state(false);
 
+  const dirty = $derived(
+    config !== null && savedJson !== "" && JSON.stringify($state.snapshot(config)) !== savedJson
+  );
+
   $effect(() => {
-    api.getConfig().then((c) => (config = c)).catch((err) => (error = formatError(err)));
+    onDirtyChange(dirty);
+  });
+
+  $effect(() => {
+    bindActions({ save, discard });
+  });
+
+  $effect(() => {
+    api
+      .getConfig()
+      .then((c) => {
+        config = c;
+        savedJson = JSON.stringify(c);
+      })
+      .catch((err) => (error = formatError(err)));
     api.listModels().then((m) => (models = m)).catch(() => {});
     refreshDoctor();
     isEnabled()
@@ -31,21 +58,31 @@
     api.runDoctor().then((checks) => (doctor = checks)).catch(() => {});
   }
 
-  async function save() {
-    if (!config) return;
+  async function save(): Promise<boolean> {
+    if (!config) return false;
     saving = true;
     error = null;
     status = null;
     try {
       config = await api.setConfig($state.snapshot(config) as AppConfig);
+      savedJson = JSON.stringify($state.snapshot(config));
       status = "Settings saved";
       setTimeout(() => (status = null), 2500);
       refreshDoctor();
+      return true;
     } catch (err) {
       error = formatError(err);
+      return false;
     } finally {
       saving = false;
     }
+  }
+
+  function discard() {
+    if (!savedJson) return;
+    config = JSON.parse(savedJson) as AppConfig;
+    void setTheme(config.general.theme as ThemeSetting);
+    error = null;
   }
 
   async function toggleAutostart() {
@@ -435,6 +472,17 @@
       </div>
     </div>
 
+    {#if dirty}
+      <div class="save-bar glass" role="status">
+        <span class="save-dot"></span>
+        <span class="save-text">Unsaved changes</span>
+        <button class="btn btn-ghost btn-sm" onclick={discard}>Discard</button>
+        <button class="btn btn-primary btn-sm" onclick={save} disabled={saving}>
+          {saving ? "Saving…" : "Save changes"}
+        </button>
+      </div>
+    {/if}
+
     <div class="panel card hotkey-panel">
       <h3>Global hotkey</h3>
       <p class="hint">
@@ -594,6 +642,45 @@
 
   .theme-select {
     width: 140px;
+  }
+
+  .save-bar {
+    position: fixed;
+    bottom: 22px;
+    right: 28px;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px 10px 16px;
+    border-radius: var(--radius-pill);
+    border-color: color-mix(in srgb, var(--ember) 35%, transparent);
+    box-shadow: var(--glow-ember-soft);
+    animation: save-bar-in 400ms var(--ease-forge) both;
+  }
+
+  @keyframes save-bar-in {
+    from {
+      opacity: 0;
+      transform: translateY(16px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .save-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--ember);
+    animation: ember-pulse 2.4s var(--ease-forge) infinite;
+  }
+
+  .save-text {
+    font-size: 13px;
+    font-weight: 600;
   }
 
   .model-row {
