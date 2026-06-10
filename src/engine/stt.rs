@@ -106,9 +106,14 @@ pub fn transcribe(cfg: &SttConfig, audio: &Path) -> Result<String> {
         .arg("--output-file")
         .arg(&prefix)
         .arg("--no-prints");
-    if !cfg.language.is_empty() && cfg.language != "auto" {
-        cmd.arg("--language").arg(&cfg.language);
-    }
+    // whisper-cli defaults to --language en, which silently translates other
+    // languages into English; auto-detection must be requested explicitly.
+    let language = if cfg.language.is_empty() {
+        "auto"
+    } else {
+        cfg.language.as_str()
+    };
+    cmd.arg("--language").arg(language);
     let output = cmd.output().context("running whisper-cli")?;
     if !output.status.success() {
         bail!(
