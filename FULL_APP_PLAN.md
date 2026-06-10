@@ -95,19 +95,21 @@ Goal: remove terminal dependence and make usage polished.
 Tasks:
 
 - [x] Add v2 Pickforge Studio brand assets under `assets/branding/`.
-- [ ] Add tray app or lightweight daemon.
-- [ ] Show tray state:
-  - idle
-  - recording
-  - transcribing
-  - cleaning
-  - error
-- [ ] Add global hotkey management.
+- [x] Add tray app (Tauri 2 + Svelte 5 desktop app in `src-tauri/` + `src/`).
+- [x] Show tray state (idle / recording / transcribing / cleaning via icon + tooltip).
+- [x] Add GUI with Pickforge design system (dashboard, history, settings).
+- [x] Add transcription history (SQLite, raw + cleaned text, search, delete).
+- [x] Add floating always-on-top draggable button with live waveform
+      (click opens the app, right-click toggles dictation).
+- [x] Add user metrics (words, speaking time, sessions, estimated time saved
+      vs typing, 14-day activity chart).
+- [x] Add sound effects for start/stop/error (synthesized chimes, replaces
+      notifications in the app flow).
+- [x] Add recording duration indicator (dashboard timer).
+- [x] Add cancel command from tray/menu and dashboard.
+- [x] Global hotkey via `pickscribe-app --toggle` (single-instance forwarding).
 - [ ] Add Caps Lock -> F13/F20 setup helper/documentation.
 - [ ] Add push-to-talk mode in addition to toggle mode.
-- [ ] Add sound effects or visual notifications for start/stop.
-- [ ] Add recording duration indicator.
-- [ ] Add cancel command from tray/menu.
 - [ ] Add simple logs view.
 
 ## Phase 4: Native audio recording
@@ -212,14 +214,14 @@ Goal: support local, BYOK, and cloud modes cleanly.
 
 Cleanup providers:
 
-- [ ] DeepSeek official API.
-- [ ] Ollama local/cloud OpenAI-compatible endpoint.
-- [ ] OpenAI-compatible custom endpoint.
-- [ ] No cleanup / raw transcript.
+- [x] DeepSeek official API.
+- [x] Ollama local/cloud OpenAI-compatible endpoint.
+- [x] OpenAI-compatible custom endpoint (with `/models` discovery in the app).
+- [x] No cleanup / raw transcript.
 
 STT providers:
 
-- [ ] Local whisper.cpp.
+- [x] Local whisper.cpp.
 - [ ] Optional cloud STT later.
 
 Security tasks:
@@ -227,7 +229,7 @@ Security tasks:
 - [ ] Never print API keys.
 - [ ] Redact secrets from logs.
 - [ ] Document exactly what text/audio leaves the machine.
-- [ ] Add local-only mode.
+- [x] Add local-only mode (app setting; blocks non-loopback cleanup endpoints).
 
 ## Phase 9: Quality-of-life features
 

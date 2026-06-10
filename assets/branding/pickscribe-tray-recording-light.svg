@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none" role="img" aria-label="PickScribe tray icon recording (light panels)">
+  <title>PickScribe tray icon recording (light panels)</title>
+  <path d="M16 25 V14 H27" stroke="#17171A" stroke-width="3" stroke-linecap="square"/>
+  <path d="M16 39 V50 H27" stroke="#17171A" stroke-width="3" stroke-linecap="square"/>
+  <path d="M37 14 H48 V25" stroke="#17171A" stroke-width="3" stroke-linecap="square"/>
+  <path d="M37 50 H48 V39" stroke="#17171A" stroke-width="3" stroke-linecap="square"/>
+  <path d="M29 32 V24 M33 32 V20 M37 32 V27" stroke="#17171A" stroke-width="2.5" stroke-linecap="round" opacity="0.75"/>
+  <circle cx="44" cy="32" r="4.5" fill="#E5610A"/>
+</svg>

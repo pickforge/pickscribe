@@ -14,7 +14,45 @@ Shortcut
   -> clipboard + paste hotkey into the focused field
 ```
 
-> **Status:** working Rust MVP for CachyOS/Arch + KDE/Wayland. The CLI flow works today; tray UI, native audio capture, config UI, and packaging are planned in [`FULL_APP_PLAN.md`](FULL_APP_PLAN.md).
+> **Status:** working Rust MVP for CachyOS/Arch + KDE/Wayland, now with a Tauri desktop app (tray, floating waveform button, history, metrics, settings UI). Native audio capture and packaging are planned in [`FULL_APP_PLAN.md`](FULL_APP_PLAN.md).
+
+## Desktop app
+
+The repo also ships **PickScribe.app**, a Tauri 2 + Svelte 5 desktop app (same stack as PickGauge) that wraps the whole pipeline:
+
+- **Dashboard** — record orb, live waveform, recording timer, and metrics: words transcribed, speaking time, sessions, and estimated time saved vs typing (baseline WPM is configurable).
+- **History** — every transcription stored locally in SQLite (`~/.local/share/pickscribe/pickscribe.db`), with both the raw whisper transcript and the cleaned text, full-text search, copy, and delete.
+- **Floating button** — a draggable always-on-top capsule that shows the live waveform while recording. Click it to open the app, right-click to toggle dictation. It never takes keyboard focus, so pasting still lands in your app.
+- **Sounds, not notifications** — short synthesized chimes on record start/stop/error (toggle in Settings).
+- **Tray** — left-click toggles dictation; the icon switches between idle and recording states.
+- **Settings** — system check (doctor), whisper model/language, cleanup provider + instructions, paste method/chord/delay, autostart, floating button, sounds.
+- **Local-only mode** — one switch that guarantees no text leaves the machine: only loopback cleanup endpoints (Ollama, LM Studio, llama.cpp server…) are allowed, remote providers are blocked and fall back to the raw transcript.
+- **Bring your own provider** — besides DeepSeek/OpenAI/Ollama there is a custom OpenAI-compatible provider (OpenRouter, OpenCode, vLLM…): point it at any `/chat/completions` URL with your own key, then hit "Fetch models" to pick from the provider's `/models` route — or just type the model name.
+
+Develop and build:
+
+```bash
+npm install
+npm run tauri dev          # run the app with hot reload
+npm run tauri build        # bundle deb + AppImage
+```
+
+Building with plain cargo instead of the tauri CLI? Enable the `custom-protocol` feature or the binary will load the dev server URL (port 1420) instead of its embedded UI:
+
+```bash
+npm run build
+cargo build --release -p pickscribe-app --features pickscribe-app/custom-protocol
+```
+
+Bind your global shortcut (e.g. remapped Caps Lock → F13) to:
+
+```bash
+pickscribe-app --toggle
+```
+
+The single-instance plugin forwards `--toggle` to the running app, so the same command starts the app when needed. Existing shortcuts pointing at the legacy wrappers keep working: `pickscribe-gui` and `pickscribe-terminal-gui` automatically forward to the desktop app when it is installed (the terminal variant passes `--paste-chord=ctrl-shift-v`), falling back to the CLI flow otherwise (`PICKSCRIBE_FORCE_CLI=1` forces the CLI). The CLI binaries keep working unchanged; the app reads the same `~/.config/pickscribe/env` for API keys and stores its own settings in `~/.config/pickscribe/config.toml`.
+
+On Wayland the app runs under XWayland by default so the floating button can stay always-on-top (set `PICKSCRIBE_NATIVE_WAYLAND=1` to opt out).
 
 ## Current behavior
 
