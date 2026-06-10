@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" fill="none" role="img" aria-label="PickScribe dictation mock">
+  <title>PICKSCRIBE · DICTATION</title>
+  <defs>
+    <clipPath id="frame"><rect width="1200" height="720" rx="14"/></clipPath>
+  </defs>
+
+  <!-- window frame -->
+  <rect width="1200" height="720" rx="14" fill="#0A0A0B"/>
+  <rect x="0.5" y="0.5" width="1199" height="719" rx="13.5" stroke="#F2F2F3" stroke-opacity="0.14"/>
+
+  <g clip-path="url(#frame)">
+    <!-- chrome -->
+    <circle cx="28" cy="24" r="5" fill="#F2F2F3" fill-opacity="0.15"/>
+    <circle cx="46" cy="24" r="5" fill="#F2F2F3" fill-opacity="0.15"/>
+    <circle cx="64" cy="24" r="5" fill="#F2F2F3" fill-opacity="0.15"/>
+    <text x="92" y="28" font-family="Geist Mono, JetBrains Mono, monospace" font-size="11" letter-spacing="2" fill="#6E6E75">PICKSCRIBE · DICTATION</text>
+    <g>
+      <rect x="1036" y="12" width="140" height="24" rx="12" fill="#FF7A1A" fill-opacity="0.05" stroke="#FF7A1A" stroke-opacity="0.3"/>
+      <circle cx="1052" cy="24" r="3" fill="#FF7A1A"/>
+      <text x="1062" y="28" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" letter-spacing="1.8" fill="#FF7A1A">RECORDING</text>
+    </g>
+    <line x1="0" y1="48" x2="1200" y2="48" stroke="#F2F2F3" stroke-opacity="0.08"/>
+
+    <!-- ===== record pane ===== -->
+    <rect x="24" y="72" width="400" height="360" rx="10" fill="#0F0F11" stroke="#F2F2F3" stroke-opacity="0.08"/>
+    <text x="44" y="100" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" letter-spacing="1.8" fill="#6E6E75">RECORD · 00:12</text>
+    <text x="404" y="100" text-anchor="end" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" letter-spacing="1.8" fill="#6E6E75" fill-opacity="0.7">PIPEWIRE · MIC</text>
+    <!-- orb -->
+    <circle cx="224" cy="208" r="58" fill="#0A0A0B" stroke="#F2F2F3" stroke-opacity="0.2" stroke-width="1.5"/>
+    <circle cx="224" cy="208" r="44" stroke="#FF7A1A" stroke-opacity="0.25" fill="none"/>
+    <circle cx="224" cy="208" r="10" fill="#FF7A1A"/>
+    <!-- waveform -->
+    <g stroke="#F2F2F3" stroke-opacity="0.45" stroke-width="3" stroke-linecap="round">
+      <line x1="84"  y1="316" x2="84"  y2="332"/>
+      <line x1="100" y1="308" x2="100" y2="340"/>
+      <line x1="116" y1="298" x2="116" y2="350"/>
+      <line x1="132" y1="312" x2="132" y2="336"/>
+      <line x1="148" y1="290" x2="148" y2="358"/>
+      <line x1="164" y1="304" x2="164" y2="344"/>
+      <line x1="180" y1="282" x2="180" y2="366"/>
+      <line x1="196" y1="300" x2="196" y2="348"/>
+      <line x1="212" y1="292" x2="212" y2="356"/>
+      <line x1="228" y1="276" x2="228" y2="372"/>
+      <line x1="244" y1="296" x2="244" y2="352"/>
+      <line x1="260" y1="286" x2="260" y2="362"/>
+      <line x1="276" y1="306" x2="276" y2="342"/>
+      <line x1="292" y1="294" x2="292" y2="354"/>
+      <line x1="308" y1="310" x2="308" y2="338"/>
+      <line x1="324" y1="300" x2="324" y2="348"/>
+      <line x1="340" y1="314" x2="340" y2="334"/>
+      <line x1="356" y1="318" x2="356" y2="330"/>
+    </g>
+    <text x="224" y="410" text-anchor="middle" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" letter-spacing="1.4" fill="#6E6E75" fill-opacity="0.7">one hotkey · press to start · press to stop</text>
+
+    <!-- ===== pipeline pane ===== -->
+    <rect x="448" y="72" width="360" height="360" rx="10" fill="#0F0F11" stroke="#F2F2F3" stroke-opacity="0.08"/>
+    <text x="468" y="100" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" letter-spacing="1.8" fill="#6E6E75">PIPELINE</text>
+    <g font-family="Geist Mono, JetBrains Mono, monospace" font-size="12">
+      <rect x="468" y="120" width="320" height="48" rx="8" fill="#0A0A0B" stroke="#F2F2F3" stroke-opacity="0.2"/>
+      <text x="488" y="148" fill="#F2F2F3" fill-opacity="0.85">MIC CAPTURE</text>
+      <text x="768" y="148" text-anchor="end" fill="#FF7A1A">✓</text>
+      <line x1="628" y1="168" x2="628" y2="186" stroke="#F2F2F3" stroke-opacity="0.25"/>
+      <rect x="468" y="188" width="320" height="48" rx="8" fill="#0A0A0B" stroke="#F2F2F3" stroke-opacity="0.2"/>
+      <text x="488" y="216" fill="#F2F2F3" fill-opacity="0.85">WHISPER.CPP · LOCAL STT</text>
+      <text x="768" y="216" text-anchor="end" fill="#FF7A1A">✓</text>
+      <line x1="628" y1="236" x2="628" y2="254" stroke="#F2F2F3" stroke-opacity="0.25"/>
+      <rect x="468" y="256" width="320" height="48" rx="8" fill="#0A0A0B" stroke="#F2F2F3" stroke-opacity="0.2"/>
+      <text x="488" y="284" fill="#F2F2F3" fill-opacity="0.85">LLM CLEANUP · NO THINKING</text>
+      <text x="768" y="284" text-anchor="end" fill="#FF7A1A">✓</text>
+      <line x1="628" y1="304" x2="628" y2="322" stroke="#F2F2F3" stroke-opacity="0.25"/>
+      <rect x="468" y="324" width="320" height="48" rx="8" fill="#FF7A1A" fill-opacity="0.05" stroke="#FF7A1A" stroke-opacity="0.4"/>
+      <text x="488" y="352" fill="#FF7A1A">PASTE → FOCUSED APP</text>
+      <text x="768" y="352" text-anchor="end" fill="#FF7A1A">●</text>
+    </g>
+    <text x="468" y="410" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" letter-spacing="1.4" fill="#6E6E75" fill-opacity="0.7">local-only mode · loopback endpoints enforced</text>
+
+    <!-- ===== history pane ===== -->
+    <rect x="832" y="72" width="344" height="360" rx="10" fill="#0F0F11" stroke="#F2F2F3" stroke-opacity="0.08"/>
+    <text x="852" y="100" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" letter-spacing="1.8" fill="#6E6E75">HISTORY · PICKSCRIBE.DB</text>
+    <g font-family="Geist Mono, JetBrains Mono, monospace" font-size="11.5">
+      <text x="852" y="132" fill="#6E6E75">raw</text>
+      <text x="852" y="150" fill="#F2F2F3" fill-opacity="0.5">so um can you send the er the</text>
+      <text x="852" y="166" fill="#F2F2F3" fill-opacity="0.5">invoice by friday</text>
+      <text x="852" y="192" fill="#6E6E75">cleaned</text>
+      <text x="852" y="210" fill="#F2F2F3">Can you send the invoice</text>
+      <text x="852" y="226" fill="#F2F2F3">by Friday?</text>
+    </g>
+    <line x1="852" y1="248" x2="1156" y2="248" stroke="#F2F2F3" stroke-opacity="0.08"/>
+    <g font-family="Geist Mono, JetBrains Mono, monospace" font-size="11.5">
+      <text x="852" y="276" fill="#6E6E75">raw</text>
+      <text x="852" y="294" fill="#F2F2F3" fill-opacity="0.5">novo paragrafo entao a gente</text>
+      <text x="852" y="310" fill="#F2F2F3" fill-opacity="0.5">fecha amanha ne</text>
+      <text x="852" y="336" fill="#6E6E75">cleaned</text>
+      <text x="852" y="354" fill="#F2F2F3">Então, a gente fecha amanhã?</text>
+    </g>
+    <text x="852" y="410" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" letter-spacing="1.4" fill="#6E6E75" fill-opacity="0.7">full-text search · copy · delete</text>
+
+    <!-- ===== metrics pane ===== -->
+    <rect x="24" y="456" width="1152" height="216" rx="10" fill="#0F0F11" stroke="#F2F2F3" stroke-opacity="0.08"/>
+    <text x="44" y="484" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" letter-spacing="1.8" fill="#6E6E75">METRICS · THIS MONTH</text>
+    <g>
+      <rect x="44" y="504" width="256" height="116" rx="8" fill="#0A0A0B" stroke="#F2F2F3" stroke-opacity="0.14"/>
+      <text x="64" y="556" font-family="Geist, Inter, Arial, sans-serif" font-size="34" font-weight="750" fill="#F2F2F3">18,402</text>
+      <text x="64" y="588" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" letter-spacing="1.8" fill="#6E6E75">WORDS TRANSCRIBED</text>
+    </g>
+    <g>
+      <rect x="324" y="504" width="256" height="116" rx="8" fill="#0A0A0B" stroke="#F2F2F3" stroke-opacity="0.14"/>
+      <text x="344" y="556" font-family="Geist, Inter, Arial, sans-serif" font-size="34" font-weight="750" fill="#F2F2F3">2h 41m</text>
+      <text x="344" y="588" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" letter-spacing="1.8" fill="#6E6E75">SPEAKING TIME</text>
+    </g>
+    <g>
+      <rect x="604" y="504" width="256" height="116" rx="8" fill="#0A0A0B" stroke="#FF7A1A" stroke-opacity="0.4"/>
+      <text x="624" y="556" font-family="Geist, Inter, Arial, sans-serif" font-size="34" font-weight="750" fill="#FF7A1A">5h 12m</text>
+      <text x="624" y="588" font-family="Geist Mono, JetBrains Mono, monospace" font-size="10" letter-spacing="1.8" fill="#6E6E75">SAVED VS TYPING</text>
+    </g>
+    <g font-family="Geist Mono, JetBrains Mono, monospace" font-size="12.5">
+      <text x="900" y="530" fill="#F2F2F3">$ pickscribe-app --toggle</text>
+      <text x="900" y="554" fill="#FF7A1A">✓ recording started</text>
+      <text x="900" y="578" fill="#F2F2F3" fill-opacity="0.7">● caps lock → F20 → dictate</text>
+      <text x="900" y="602" fill="#F2F2F3">▌</text>
+    </g>
+  </g>
+</svg>

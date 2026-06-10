@@ -1,10 +1,10 @@
+<p align="center">
+  <img src="assets/branding/pickscribe-lockup-horizontal.svg" alt="PickScribe" width="560">
+</p>
+
 # PickScribe
 
-### Local Linux dictation with AI cleanup — by Pickforge Studio
-
-![PickScribe brand preview](assets/branding/pickscribe-og-image.png)
-
-PickScribe is a Linux-first dictation tool that records your microphone, transcribes speech locally with `whisper.cpp`, cleans the transcript with an OpenAI-compatible LLM provider, and pastes the final text into the focused app.
+Local Linux dictation with AI cleanup. PickScribe records your microphone, transcribes speech locally with `whisper.cpp`, cleans the transcript with an OpenAI-compatible LLM provider, and pastes the final text into the focused app — one hotkey to start, the same hotkey to stop.
 
 ```text
 Shortcut
@@ -14,11 +14,13 @@ Shortcut
   -> clipboard + paste hotkey into the focused field
 ```
 
+Local-first. Open source. Built for people who ship.
+
 > **Status:** working Rust MVP for CachyOS/Arch + KDE/Wayland, now with a Tauri desktop app (tray, floating waveform button, history, metrics, settings UI). Native audio capture and packaging are planned in [`FULL_APP_PLAN.md`](FULL_APP_PLAN.md).
 
-## Desktop app
+## The desktop app
 
-The repo also ships **PickScribe.app**, a Tauri 2 + Svelte 5 desktop app (same stack as PickGauge) that wraps the whole pipeline:
+The repo ships **PickScribe.app**, a Tauri 2 + Svelte 5 desktop app (same stack as PickGauge) that wraps the whole pipeline:
 
 - **Dashboard** — record orb, live waveform, recording timer, and metrics: words transcribed, speaking time, sessions, and estimated time saved vs typing (baseline WPM is configurable).
 - **History** — every transcription stored locally in SQLite (`~/.local/share/pickscribe/pickscribe.db`), with both the raw whisper transcript and the cleaned text, full-text search, copy, and delete.
@@ -28,6 +30,10 @@ The repo also ships **PickScribe.app**, a Tauri 2 + Svelte 5 desktop app (same s
 - **Settings** — system check (doctor), whisper model/language, cleanup provider + instructions, paste method/chord/delay, autostart, floating button, sounds.
 - **Local-only mode** — one switch that guarantees no text leaves the machine: only loopback cleanup endpoints (Ollama, LM Studio, llama.cpp server…) are allowed, remote providers are blocked and fall back to the raw transcript.
 - **Bring your own provider** — besides DeepSeek/OpenAI/Ollama there is a custom OpenAI-compatible provider (OpenRouter, OpenCode, vLLM…): point it at any `/chat/completions` URL with your own key, then hit "Fetch models" to pick from the provider's `/models` route — or just type the model name.
+
+<p align="center">
+  <img src="assets/branding/pickscribe-dictation-mock.svg" alt="PICKSCRIBE · DICTATION — record orb and waveform, local pipeline, raw vs cleaned history, and time-saved metrics" width="900">
+</p>
 
 Develop and build:
 
@@ -64,7 +70,7 @@ On Wayland the app runs under XWayland by default so the floating button can sta
 - Copies the cleaned text to clipboard and pastes with `Ctrl+V` by default.
 - Keeps old MVP aliases (`voice-flow`, `voice-cleanup`) for compatibility, but the app name is PickScribe.
 
-## Quick start
+## Install
 
 Install system dependencies on Arch/CachyOS:
 
@@ -321,3 +327,11 @@ See [`FULL_APP_PLAN.md`](FULL_APP_PLAN.md) for the full product plan, including:
 ## License
 
 MIT © 2026 Pickforge Studio
+
+---
+
+<p align="center">
+  <a href="https://pickforge.dev">
+    <img src="assets/branding/pickforge-studio-footer.svg" alt="Pickforge Studio — local-first, open source, built for people who ship" width="560">
+  </a>
+</p>
