@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
+# Terminal-flavored shortcut entry point: pastes with Ctrl+Shift+V. When the
+# PickScribe desktop app is installed, forward to it with the chord override;
+# otherwise fall back to the CLI flow. PICKSCRIBE_FORCE_CLI=1 skips the app.
+APP_BIN="${PICKSCRIBE_APP_BIN:-$HOME/.local/bin/pickscribe-app}"
+if [[ -z "${PICKSCRIBE_FORCE_CLI:-}" && -x "$APP_BIN" ]]; then
+  exec "$APP_BIN" --toggle --paste-chord=ctrl-shift-v
+fi
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 LOADER="${PICKSCRIBE_ENV_LOADER:-$HOME/.local/bin/pickscribe-env.sh}"
 if [[ ! -f "$LOADER" ]]; then

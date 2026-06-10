@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
+# Stable shortcut entry point. When the PickScribe desktop app is installed,
+# forward to it (sounds, history, float capsule); otherwise fall back to the
+# CLI flow. Set PICKSCRIBE_FORCE_CLI=1 to always use the CLI.
+APP_BIN="${PICKSCRIBE_APP_BIN:-$HOME/.local/bin/pickscribe-app}"
+if [[ -z "${PICKSCRIBE_FORCE_CLI:-}" && -x "$APP_BIN" ]]; then
+  exec "$APP_BIN" --toggle
+fi
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 LOADER="${PICKSCRIBE_ENV_LOADER:-$HOME/.local/bin/pickscribe-env.sh}"
 if [[ ! -f "$LOADER" ]]; then
