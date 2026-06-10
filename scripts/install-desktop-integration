@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Installs the PickScribe desktop entry and icons. Wayland compositors show
+# window icons by matching the window's app_id ("pickscribe-app") to an
+# installed .desktop file — without this, KDE shows the generic Wayland icon.
+
+REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+APP_BIN="${1:-$HOME/.local/bin/pickscribe-app}"
+ICON_ROOT="$HOME/.local/share/icons/hicolor"
+APPS_DIR="$HOME/.local/share/applications"
+
+for size in 32 64 128 256 512; do
+  install -Dm644 "$REPO_DIR/assets/branding/pickscribe-app-icon-${size}.png" \
+    "$ICON_ROOT/${size}x${size}/apps/pickscribe-app.png"
+done
+
+mkdir -p "$APPS_DIR"
+cat > "$APPS_DIR/pickscribe-app.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=PickScribe
+GenericName=Dictation
+Comment=Local dictation with AI cleanup
+Exec=$APP_BIN
+Icon=pickscribe-app
+Terminal=false
+Categories=Utility;Audio;
+Keywords=dictation;speech;voice;whisper;
+StartupWMClass=pickscribe-app
+EOF
+
+command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$APPS_DIR" || true
+command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q "$ICON_ROOT" 2>/dev/null || true
+
+echo "PickScribe desktop integration installed (restart the app to pick up the icon)."
