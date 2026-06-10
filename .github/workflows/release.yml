@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Build Linux bundles
+    # Older LTS keeps the AppImage glibc baseline broad.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Tauri bundle dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            libfuse2 \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            patchelf \
+            wget
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tauri bundles
+        env:
+          NO_STRIP: "1"
+        run: npm run tauri -- build --bundles deb,appimage
+
+      - name: Collect release assets
+        run: |
+          mkdir -p release-assets
+          while IFS= read -r -d '' asset; do
+            cp "$asset" release-assets/
+          done < <(
+            find target/release/bundle -type f \
+              \( -name '*.AppImage' -o -name '*.deb' \) -print0
+          )
+          asset_count="$(find release-assets -type f | wc -l | tr -d ' ')"
+          if [[ "$asset_count" == "0" ]]; then
+            echo "No release assets were produced."
+            exit 1
+          fi
+          ls -la release-assets
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: pickscribe-linux-${{ github.run_number }}
+          path: release-assets/
+
+      - name: Create GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          release_notes="$(cat <<'EOF'
+          ## Platform support
+
+          PickScribe is Linux-first (PipeWire + whisper.cpp + ydotool). The
+          bundles below are built and smoke-checked on Ubuntu; Arch/CachyOS
+          users can also build from source with `npm run tauri build`.
+          EOF
+          )"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; reusing it."
+          else
+            gh release create "$RELEASE_TAG" \
+              --title "PickScribe ${RELEASE_TAG}" \
+              --notes "$release_notes" \
+              --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" release-assets/* --clobber
