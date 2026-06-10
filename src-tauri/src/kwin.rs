@@ -14,6 +14,22 @@ const RULE_GROUP: &str = "pickscribe-float-keep-above";
 const FLOAT_TITLE: &str = "PickScribe Float";
 const WM_CLASS: &str = "pickscribe";
 
+fn group_has_key(contents: &str, group: &str, key: &str) -> bool {
+    let header = format!("[{group}]");
+    let mut in_group = false;
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_group = trimmed == header;
+            continue;
+        }
+        if in_group && trimmed.starts_with(key) {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn ensure_float_rule() {
     if std::env::var("XDG_SESSION_TYPE").as_deref() != Ok("wayland") {
         return;
@@ -29,10 +45,10 @@ pub fn ensure_float_rule() {
         return;
     };
     let rules_path = Path::new(&home).join(".config/kwinrulesrc");
-    if std::fs::read_to_string(&rules_path)
-        .unwrap_or_default()
-        .contains(RULE_GROUP)
-    {
+    let existing_rules = std::fs::read_to_string(&rules_path).unwrap_or_default();
+    let already_registered = existing_rules.contains(RULE_GROUP);
+    // "positionrule" inside our group marks the current revision; rewrite older ones.
+    if already_registered && group_has_key(&existing_rules, RULE_GROUP, "positionrule") {
         return;
     }
 
@@ -81,9 +97,13 @@ pub fn ensure_float_rule() {
     write("skippagerrule", "2");
     write("skipswitcher", "true");
     write("skipswitcherrule", "2");
+    // Initial spot only (rule 3 = apply initially) — the capsule stays
+    // draggable, and each Pickforge app gets its own row to avoid stacking.
+    write("position", "64,64");
+    write("positionrule", "3");
 
     // Register the rule group in the [General] rules list (Plasma 6 format).
-    if find_command(read_tool).is_some() {
+    if !already_registered && find_command(read_tool).is_some() {
         let existing = Command::new(read_tool)
             .args(["--file", "kwinrulesrc", "--group", "General", "--key", "rules"])
             .output()

@@ -286,7 +286,10 @@ pub(crate) fn ensure_float_window(app: &AppHandle, visible: bool) {
             f64::from(FLOAT_WINDOW_WIDTH),
             f64::from(FLOAT_WINDOW_HEIGHT),
         )
-        .resizable(false)
+        // Resizable + exact min/max hints: with the decoration CSS reset in
+        // clamp_float_window_size, GTK honors these as a fixed size on
+        // Wayland (non-resizable windows ignore programmatic resizes there).
+        .resizable(true)
         .maximizable(false)
         .minimizable(false)
         .decorations(false)
@@ -303,19 +306,97 @@ pub(crate) fn ensure_float_window(app: &AppHandle, visible: bool) {
     }
 }
 
-/// WebKitGTK requests a 200x200 minimum for its webview, which inflates the
-/// capsule window. Force the real size back onto the GTK child.
+/// GTK won't size the capsule correctly on its own: WebKitGTK requests a
+/// 200x200 minimum on X11, and on Wayland resizes issued before the surface
+/// is mapped are dropped, collapsing the window to the webview's tiny natural
+/// height. Clamp immediately and again shortly after mapping.
 #[cfg(target_os = "linux")]
 fn clamp_float_window_size(window: &tauri::WebviewWindow) {
-    let window_handle = window.clone();
-    let _ = window.run_on_main_thread(move || {
-        use gtk::prelude::*;
+    fn clamp_now(window: &tauri::WebviewWindow) {
+        let window_handle = window.clone();
+        let _ = window.run_on_main_thread(move || {
+            use gtk::prelude::*;
 
-        if let Ok(gtk_window) = window_handle.gtk_window() {
-            if let Some(child) = gtk_window.child() {
-                child.set_size_request(FLOAT_WINDOW_WIDTH, FLOAT_WINDOW_HEIGHT);
+            if let Ok(gtk_window) = window_handle.gtk_window() {
+                gtk_window.set_size_request(FLOAT_WINDOW_WIDTH, FLOAT_WINDOW_HEIGHT);
+                if let Some(child) = gtk_window.child() {
+                    child.set_size_request(FLOAT_WINDOW_WIDTH, FLOAT_WINDOW_HEIGHT);
+                }
+                gtk_window.resize(FLOAT_WINDOW_WIDTH, FLOAT_WINDOW_HEIGHT);
             }
-            gtk_window.resize(FLOAT_WINDOW_WIDTH, FLOAT_WINDOW_HEIGHT);
+        });
+    }
+
+    // GTK reserves invisible CSD shadow/resize margins (~26px per side) on
+    // undecorated Wayland windows, shrinking the visible capsule by 52px in
+    // each axis. Strip the decoration node entirely.
+    {
+        let window_handle = window.clone();
+        let _ = window.run_on_main_thread(move || {
+            use gtk::prelude::CssProviderExt;
+            let provider = gtk::CssProvider::new();
+            let _ = provider.load_from_data(
+                b"decoration{box-shadow:none;margin:0;padding:0;border:none;border-radius:0;}",
+            );
+            if let Some(screen) = gtk::gdk::Screen::default() {
+                gtk::StyleContext::add_provider_for_screen(
+                    &screen,
+                    &provider,
+                    gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+                );
+            }
+            let _ = window_handle;
+        });
+    }
+
+    clamp_now(window);
+    // GTK3 CSD quirk: geometry hints are interpreted including the invisible
+    // shadow margins while resize() works on content size, so a fixed hint
+    // clamps the content too small (by the shadow size, theme-dependent).
+    // Feedback loop: measure the content-size error and grow the hints until
+    // the content settles at exactly the target.
+    let window = window.clone();
+    std::thread::spawn(move || {
+        let compensation = std::sync::Arc::new(std::sync::Mutex::new((0i32, 0i32)));
+        for _ in 0..30 {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            let handle = window.clone();
+            let compensation = std::sync::Arc::clone(&compensation);
+            let _ = window.run_on_main_thread(move || {
+                use gtk::prelude::*;
+
+                let Ok(gtk_window) = handle.gtk_window() else {
+                    return;
+                };
+                let (content_w, content_h) = gtk_window.size();
+                if content_w == FLOAT_WINDOW_WIDTH && content_h == FLOAT_WINDOW_HEIGHT {
+                    return;
+                }
+                let mut comp = compensation.lock().unwrap();
+                comp.0 = (comp.0 + FLOAT_WINDOW_WIDTH - content_w).clamp(0, 200);
+                comp.1 = (comp.1 + FLOAT_WINDOW_HEIGHT - content_h).clamp(0, 200);
+                let total_w = FLOAT_WINDOW_WIDTH + comp.0;
+                let total_h = FLOAT_WINDOW_HEIGHT + comp.1;
+                let geometry = gtk::gdk::Geometry::new(
+                    total_w,
+                    total_h,
+                    total_w,
+                    total_h,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0f64,
+                    0f64,
+                    gtk::gdk::Gravity::Center,
+                );
+                gtk_window.set_geometry_hints(
+                    None::<&gtk::Window>,
+                    Some(&geometry),
+                    gtk::gdk::WindowHints::MIN_SIZE | gtk::gdk::WindowHints::MAX_SIZE,
+                );
+                gtk_window.resize(total_w, total_h);
+            });
         }
     });
 }
