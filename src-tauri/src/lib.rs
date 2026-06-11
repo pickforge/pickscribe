@@ -254,6 +254,27 @@ pub(crate) fn show_main_window(app: &AppHandle) {
     }
 }
 
+// tao's Wayland CSD wraps the header bar in a GtkEventBox with
+// above-child input, which swallows clicks on the minimize/maximize/close
+// buttons until a maximize/restore cycle re-stacks the input windows
+// (tauri-apps/tao#1218). Lower the box below its child so the buttons get
+// their events back.
+#[cfg(target_os = "linux")]
+fn fix_csd_titlebar_input(window: &tauri::WebviewWindow) {
+    let handle = window.clone();
+    let _ = window.run_on_main_thread(move || {
+        use gtk::prelude::*;
+
+        if let Ok(gtk_window) = handle.gtk_window() {
+            if let Some(titlebar) = gtk_window.titlebar() {
+                if let Some(event_box) = titlebar.downcast_ref::<gtk::EventBox>() {
+                    event_box.set_above_child(false);
+                }
+            }
+        }
+    });
+}
+
 // Shared Pickforge float-capsule geometry (kept in sync with PickGauge).
 const FLOAT_WINDOW_WIDTH: i32 = 208;
 const FLOAT_WINDOW_HEIGHT: i32 = 60;
@@ -329,14 +350,20 @@ fn clamp_float_window_size(window: &tauri::WebviewWindow) {
 
     // GTK reserves invisible CSD shadow/resize margins (~26px per side) on
     // undecorated Wayland windows, shrinking the visible capsule by 52px in
-    // each axis. Strip the decoration node entirely.
+    // each axis. Strip the decoration node — but only for this window: a
+    // screen-wide reset also desyncs the main window's CSD hit-testing, so
+    // its titlebar buttons stop responding until a maximize re-syncs them.
     {
         let window_handle = window.clone();
         let _ = window.run_on_main_thread(move || {
-            use gtk::prelude::CssProviderExt;
+            use gtk::prelude::*;
+
+            if let Ok(gtk_window) = window_handle.gtk_window() {
+                gtk_window.set_widget_name("pickforge-float");
+            }
             let provider = gtk::CssProvider::new();
             let _ = provider.load_from_data(
-                b"decoration{box-shadow:none;margin:0;padding:0;border:none;border-radius:0;}",
+                b"window#pickforge-float decoration{box-shadow:none;margin:0;padding:0;border:none;border-radius:0;}",
             );
             if let Some(screen) = gtk::gdk::Screen::default() {
                 gtk::StyleContext::add_provider_for_screen(
@@ -345,7 +372,6 @@ fn clamp_float_window_size(window: &tauri::WebviewWindow) {
                     gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
                 );
             }
-            let _ = window_handle;
         });
     }
 
@@ -450,6 +476,10 @@ pub fn run() {
             tray::setup(app)?;
             let cfg = AppConfig::load();
             ensure_float_window(app.handle(), cfg.general.float_button);
+            #[cfg(target_os = "linux")]
+            if let Some(window) = app.get_webview_window("main") {
+                fix_csd_titlebar_input(&window);
+            }
             let args: Vec<String> = std::env::args().collect();
             if args.iter().any(|a| a == "--hidden") {
                 if let Some(window) = app.get_webview_window("main") {
