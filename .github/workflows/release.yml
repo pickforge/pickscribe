@@ -25,10 +25,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v6
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: 24
-          cache: npm
+          bun-version: latest
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -51,12 +50,12 @@ jobs:
             wget
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       - name: Build Tauri bundles
         env:
           NO_STRIP: "1"
-        run: npm run tauri -- build --bundles deb,appimage
+        run: bun run tauri build --bundles deb,appimage
 
       - name: Collect release assets
         run: |
@@ -91,7 +90,7 @@ jobs:
 
           PickScribe is Linux-first (PipeWire + whisper.cpp + ydotool). The
           bundles below are built and smoke-checked on Ubuntu; Arch/CachyOS
-          users can also build from source with `npm run tauri build`.
+          users can also build from source with `bun run tauri build`.
           EOF
           )"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then

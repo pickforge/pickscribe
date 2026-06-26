@@ -20,10 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v6
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: 24
-          cache: npm
+          bun-version: latest
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -42,13 +41,13 @@ jobs:
             patchelf
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       - name: Svelte type check
-        run: npm run check
+        run: bun run check
 
       - name: Build frontend
-        run: npm run build
+        run: bun run build
 
       - name: Rust tests
         run: cargo test --workspace

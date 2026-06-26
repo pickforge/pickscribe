@@ -38,15 +38,15 @@ The repo ships **PickScribe.app**, a Tauri 2 + Svelte 5 desktop app (same stack 
 Develop and build:
 
 ```bash
-npm install
-npm run tauri dev          # run the app with hot reload
-npm run tauri build        # bundle deb + AppImage
+bun install
+bun run tauri dev          # run the app with hot reload
+bun run tauri build        # bundle deb + AppImage
 ```
 
 Building with plain cargo instead of the tauri CLI? Enable the `custom-protocol` feature or the binary will load the dev server URL (port 1420) instead of its embedded UI:
 
 ```bash
-npm run build
+bun run build
 cargo build --release -p pickscribe-app --features pickscribe-app/custom-protocol
 ```
 
