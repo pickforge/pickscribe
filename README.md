@@ -16,6 +16,8 @@ Shortcut
 
 Local-first. Open source. Built for people who ship.
 
+PickForge builds the app. PickScribe lets you dictate into it — or any other app — instead of typing.
+
 > **Status:** working Rust MVP for CachyOS/Arch + KDE/Wayland, now with a Tauri desktop app (tray, floating waveform button, history, metrics, settings UI). Native audio capture and packaging are planned in [`FULL_APP_PLAN.md`](FULL_APP_PLAN.md).
 
 ## The desktop app
@@ -34,21 +36,6 @@ The repo ships **PickScribe.app**, a Tauri 2 + Svelte 5 desktop app (same stack 
 <p align="center">
   <img src="assets/branding/pickscribe-dictation-mock.svg" alt="PICKSCRIBE · DICTATION — record orb and waveform, local pipeline, raw vs cleaned history, and time-saved metrics" width="900">
 </p>
-
-Develop and build:
-
-```bash
-bun install
-bun run tauri dev          # run the app with hot reload
-bun run tauri build        # bundle deb + AppImage
-```
-
-Building with plain cargo instead of the tauri CLI? Enable the `custom-protocol` feature or the binary will load the dev server URL (port 1420) instead of its embedded UI:
-
-```bash
-bun run build
-cargo build --release -p pickscribe-app --features pickscribe-app/custom-protocol
-```
 
 Bind your global shortcut (e.g. remapped Caps Lock → F13) to:
 
@@ -305,10 +292,11 @@ Canonical PickScribe brand assets live in `assets/branding/`. The set follows th
 
 ## Privacy and security
 
-- Audio transcription is local when using the bundled `whisper.cpp` flow.
-- Transcript text is sent to DeepSeek only for cleanup when LLM cleanup is enabled.
+- Audio never leaves your machine. Recordings are transcribed locally with `whisper.cpp` and are never uploaded.
+- Cleanup sends text, never audio. When LLM cleanup is enabled, the transcribed text is sent to the configured LLM endpoint — DeepSeek by default — for the cleanup step, and nothing else.
+- Local-only mode keeps text on the machine too. It allows loopback cleanup endpoints (Ollama, LM Studio, llama.cpp server…) only, blocks remote providers, and falls back to the raw transcript.
 - API keys live in `~/.config/pickscribe/env`, which should be `chmod 600`.
-- PickScribe never intentionally prints API keys; docs and diagnostics should redact secrets.
+- PickScribe never intentionally prints API keys; docs and diagnostics redact secrets.
 
 ## Roadmap
 
@@ -323,6 +311,22 @@ See [`FULL_APP_PLAN.md`](FULL_APP_PLAN.md) for the full product plan, including:
 - native audio capture;
 - embedded/warm Whisper backend;
 - release packaging.
+
+## Development
+
+```bash
+bun install
+bun run tauri dev          # run the desktop app with hot reload
+bun run tauri build        # bundle deb + AppImage
+bun run check              # svelte-check type and template diagnostics
+```
+
+Building with plain cargo instead of the tauri CLI? Enable the `custom-protocol` feature, or the binary loads the dev server URL (port 1420) instead of its embedded UI:
+
+```bash
+bun run build
+cargo build --release -p pickscribe-app --features pickscribe-app/custom-protocol
+```
 
 ## License
 
