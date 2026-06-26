@@ -4,6 +4,7 @@
   import X from "phosphor-svelte/lib/X";
   import {
     api,
+    desktopApiAvailable,
     formatDuration,
     formatMinutes,
     formatError,
@@ -24,11 +25,13 @@
   let nowMs = $state(Date.now());
 
   $effect(() => {
-    api.getConfig().then((c) => (localOnly = c.general.local_only)).catch(() => {});
+    if (!desktopApiAvailable()) return;
+    api.getAppConfig().then((c) => (localOnly = c.general.local_only)).catch(() => {});
   });
 
   $effect(() => {
     void historyVersion;
+    if (!desktopApiAvailable()) return;
     api
       .getMetrics()
       .then((m) => {
@@ -114,6 +117,7 @@
 
   <div class="stage card">
     <button
+      type="button"
       class="orb"
       class:recording={dictation.stage === "recording"}
       class:busy
@@ -137,7 +141,7 @@
       <div class="stage-meta">
         {#if elapsed}
           <span class="elapsed">{elapsed}</span>
-          <button class="btn btn-ghost btn-sm" onclick={cancel}>
+          <button type="button" class="btn btn-ghost btn-sm" onclick={cancel}>
             <X size={13} /> Cancel
           </button>
         {:else if busy}

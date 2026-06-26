@@ -4,6 +4,7 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import {
     api,
+    desktopApiAvailable,
     EVENT_LEVEL,
     EVENT_STATE,
     type StatePayload,
@@ -17,6 +18,10 @@
   let levels = $state<number[]>(Array(LEVEL_BARS).fill(0));
 
   onMount(() => {
+    if (!desktopApiAvailable()) {
+      return;
+    }
+
     const unsubs: Array<() => void> = [];
     api.getState().then((s) => (stage = s.stage)).catch(() => {});
     listen<StatePayload>(EVENT_STATE, (event) => {
@@ -56,7 +61,7 @@
 
   function onPointerUp(event: PointerEvent) {
     if (event.button === 0 && downAt && !dragged) {
-      api.showMain().catch(() => {});
+      api.showMainWindow().catch(() => {});
     } else if (event.button === 1) {
       // Middle-click dismisses the capsule (persisted; re-enable from the
       // tray menu or Settings).
@@ -78,7 +83,7 @@
   role="button"
   tabindex="-1"
   aria-label="PickScribe — click to open, right-click to toggle dictation, middle-click to hide"
-  title="Click to open PickScribe · right-click to toggle dictation · middle-click to hide"
+  title="PickScribe — click to open, right-click to toggle dictation, middle-click to hide, drag to move"
   onpointerdown={onPointerDown}
   onpointermove={onPointerMove}
   onpointerup={onPointerUp}

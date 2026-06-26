@@ -6,6 +6,7 @@
   import CaretDown from "phosphor-svelte/lib/CaretDown";
   import {
     api,
+    desktopApiAvailable,
     formatDuration,
     formatError,
     formatTimestamp,
@@ -24,6 +25,10 @@
 
   $effect(() => {
     void historyVersion;
+    if (!desktopApiAvailable()) {
+      loaded = true;
+      return;
+    }
     const query = search;
     const timer = setTimeout(
       () => {
@@ -94,7 +99,7 @@
       <h2>Every dictation, before and after cleanup</h2>
     </div>
     {#if entries.length > 0}
-      <button class="btn btn-danger btn-sm" onclick={clearAll}>
+      <button type="button" class="btn btn-danger btn-sm" onclick={clearAll}>
         <Trash size={13} />
         {confirmClear ? "Confirm clear all?" : "Clear all"}
       </button>
@@ -142,6 +147,7 @@
             </div>
             <div class="entry-actions">
               <button
+                type="button"
                 class="btn btn-ghost btn-sm"
                 onclick={() => copy(entry, "clean")}
                 title="Copy text"
@@ -149,6 +155,7 @@
                 {#if copiedId === `${entry.id}-clean`}<Check size={13} /> Copied{:else}<Copy size={13} /> Copy{/if}
               </button>
               <button
+                type="button"
                 class="icon-btn"
                 onclick={() => remove(entry.id)}
                 title="Delete entry"
@@ -162,14 +169,14 @@
           <p class="entry-text">{entry.cleaned_text ?? entry.raw_text}</p>
 
           {#if entry.cleaned_text}
-            <button class="raw-toggle" onclick={() => toggleExpanded(entry.id)}>
+            <button type="button" class="raw-toggle" onclick={() => toggleExpanded(entry.id)}>
               <span class="caret" class:open={expanded.has(entry.id)}><CaretDown size={12} /></span>
               Raw whisper transcript
             </button>
             {#if expanded.has(entry.id)}
               <div class="raw-block">
                 <p class="raw-text">{entry.raw_text}</p>
-                <button class="btn btn-ghost btn-sm" onclick={() => copy(entry, "raw")}>
+                <button type="button" class="btn btn-ghost btn-sm" onclick={() => copy(entry, "raw")}>
                   {#if copiedId === `${entry.id}-raw`}<Check size={13} /> Copied{:else}<Copy size={13} /> Copy raw{/if}
                 </button>
               </div>
