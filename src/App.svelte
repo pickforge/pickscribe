@@ -1,5 +1,6 @@
 <script lang="ts">
   import { listen } from "@tauri-apps/api/event";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount } from "svelte";
   import ClockCounterClockwise from "phosphor-svelte/lib/ClockCounterClockwise";
   import GearSix from "phosphor-svelte/lib/GearSix";
@@ -76,9 +77,36 @@
       return;
     }
 
-    void checkForUpdates();
-
     const unsubs: Array<() => void> = [];
+
+    // Autostart's "Launch at login" starts the app `--hidden`, which hides the
+    // main window — so a blocking update confirm() must not pop from an
+    // invisible webview. Only this main window runs the check (the float capsule
+    // mounts Float, not App), and only while visible; otherwise defer it until
+    // the window is first shown.
+    let updateCheckDone = false;
+    const runUpdateCheck = () => {
+      if (updateCheckDone) {
+        return;
+      }
+      updateCheckDone = true;
+      void checkForUpdates();
+    };
+    const mainWindow = getCurrentWindow();
+    void mainWindow.isVisible().then((visible) => {
+      if (visible) {
+        runUpdateCheck();
+        return;
+      }
+      mainWindow
+        .onFocusChanged(({ payload: focused }) => {
+          if (focused) {
+            runUpdateCheck();
+          }
+        })
+        .then((u) => unsubs.push(u));
+    });
+
     api.getState().then((s) => (dictation = s)).catch(() => {});
     listen<StatePayload>(EVENT_STATE, (event) => {
       dictation = event.payload;

@@ -295,6 +295,7 @@ Canonical PickScribe brand assets live in `assets/branding/`. The set follows th
 - Audio never leaves your machine. Recordings are transcribed locally with `whisper.cpp` and are never uploaded.
 - Cleanup sends text, never audio. When LLM cleanup is enabled, the transcribed text is sent to the configured LLM endpoint — DeepSeek by default — for the cleanup step, and nothing else.
 - Local-only mode keeps text on the machine too. It allows loopback cleanup endpoints (Ollama, LM Studio, llama.cpp server…) only, blocks remote providers, and falls back to the raw transcript.
+- Update checks contact GitHub. Packaged builds fetch the GitHub Releases `latest.json` on startup to see whether a newer version exists (version metadata only — never your transcripts, audio, or documents). This is independent of Local-only mode and cleanup.
 - API keys live in `~/.config/pickscribe/env`, which should be `chmod 600`.
 - PickScribe never intentionally prints API keys; docs and diagnostics redact secrets.
 

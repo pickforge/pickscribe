@@ -25,6 +25,22 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Verify tag matches app version
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          conf_version="$(jq -r '.version' src-tauri/tauri.conf.json)"
+          tag_version="${RELEASE_TAG#v}"
+          if [[ "$tag_version" != "$conf_version" ]]; then
+            echo "ERROR: tag $RELEASE_TAG (version $tag_version) does not match"
+            echo "src-tauri/tauri.conf.json version $conf_version."
+            echo "The updater manifest version would not match the bundle. Retag or"
+            echo "bump tauri.conf.json before releasing."
+            exit 1
+          fi
+          echo "Tag version $tag_version matches tauri.conf.json."
+
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
@@ -79,6 +95,7 @@ jobs:
           # The exact name varies by Tauri version, so discover the .sig and
           # derive the artifact + manifest from it. `version` comes from the tag
           # (strip the leading v), which must match tauri.conf.json's version.
+          updater_active="$(jq -r '.bundle.createUpdaterArtifacts // false' src-tauri/tauri.conf.json)"
           sig_path="$(find target/release/bundle -type f -name '*.sig' | head -1)"
           if [[ -n "$sig_path" ]]; then
             artifact_path="${sig_path%.sig}"
@@ -93,8 +110,14 @@ jobs:
               > release-assets/latest.json
             echo "Generated latest.json:"
             cat release-assets/latest.json
+          elif [[ "$updater_active" == "true" ]]; then
+            echo "ERROR: updater artifacts are enabled (createUpdaterArtifacts=true) but"
+            echo "no .sig was produced, so no latest.json could be generated."
+            echo "Shipping would leave installed apps with a broken updater feed."
+            echo "Is TAURI_SIGNING_PRIVATE_KEY (and its password) set in repo secrets?"
+            exit 1
           else
-            echo "WARNING: no updater signature found — is TAURI_SIGNING_PRIVATE_KEY set?"
+            echo "WARNING: no updater signature found and updater artifacts are disabled — skipping latest.json."
           fi
 
           asset_count="$(find release-assets -type f | wc -l | tr -d ' ')"
