@@ -11,6 +11,8 @@
     "autostart:allow-enable",
     "autostart:allow-disable",
     "autostart:allow-is-enabled",
-    "opener:default"
+    "opener:default",
+    "updater:default",
+    "process:default"
   ]
 }

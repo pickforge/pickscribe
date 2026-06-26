@@ -15,6 +15,7 @@
   import Dashboard from "./lib/views/Dashboard.svelte";
   import History from "./lib/views/History.svelte";
   import Settings from "./lib/views/Settings.svelte";
+  import { checkForUpdates } from "./lib/updater";
 
   type View = "dashboard" | "history" | "settings";
 
@@ -74,6 +75,8 @@
     if (!desktopApiAvailable()) {
       return;
     }
+
+    void checkForUpdates();
 
     const unsubs: Array<() => void> = [];
     api.getState().then((s) => (dictation = s)).catch(() => {});
