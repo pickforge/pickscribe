@@ -3,7 +3,7 @@
   import CheckCircle from "phosphor-svelte/lib/CheckCircle";
   import WarningCircle from "phosphor-svelte/lib/WarningCircle";
   import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
-  import { api, formatError, type AppConfig, type DoctorCheck } from "../api";
+  import { api, desktopApiAvailable, formatError, type AppConfig, type DoctorCheck } from "../api";
   import { setTheme, type ThemeSetting } from "../theme";
 
   let {
@@ -40,8 +40,9 @@
   });
 
   $effect(() => {
+    if (!desktopApiAvailable()) return;
     api
-      .getConfig()
+      .getAppConfig()
       .then((c) => {
         config = c;
         savedJson = JSON.stringify(c);
@@ -64,7 +65,7 @@
     error = null;
     status = null;
     try {
-      config = await api.setConfig($state.snapshot(config) as AppConfig);
+      config = await api.updateAppConfig($state.snapshot(config) as AppConfig);
       savedJson = JSON.stringify($state.snapshot(config));
       status = "Settings saved";
       setTimeout(() => (status = null), 2500);
@@ -127,7 +128,7 @@
     </div>
     <div class="head-actions">
       {#if status}<span class="pill ok">{status}</span>{/if}
-      <button class="btn btn-primary" onclick={save} disabled={saving || !config}>
+      <button type="button" class="btn btn-primary" onclick={save} disabled={saving || !config}>
         {saving ? "Saving…" : "Save changes"}
       </button>
     </div>
@@ -140,7 +141,7 @@
   <div class="panel card">
     <div class="panel-head">
       <h3>System check</h3>
-      <button class="btn btn-ghost btn-sm" onclick={refreshDoctor}>
+      <button type="button" class="btn btn-ghost btn-sm" onclick={refreshDoctor}>
         <ArrowsClockwise size={13} /> Re-run
       </button>
     </div>
@@ -187,6 +188,7 @@
             <p class="hint">Short ember chimes replace desktop notifications.</p>
           </div>
           <button
+            type="button"
             class="switch"
             role="switch"
             aria-checked={config.general.sounds}
@@ -203,6 +205,7 @@
             </p>
           </div>
           <button
+            type="button"
             class="switch"
             role="switch"
             aria-checked={config.general.float_button}
@@ -216,6 +219,7 @@
             <p class="hint">Starts hidden in the tray.</p>
           </div>
           <button
+            type="button"
             class="switch"
             role="switch"
             aria-checked={autostart}
@@ -249,6 +253,7 @@
             </p>
           </div>
           <button
+            type="button"
             class="switch"
             role="switch"
             aria-checked={config.general.local_only}
@@ -262,6 +267,7 @@
             <p class="hint">Recordings are deleted after transcription by default.</p>
           </div>
           <button
+            type="button"
             class="switch"
             role="switch"
             aria-checked={config.general.keep_audio}
@@ -343,6 +349,7 @@
               bind:value={config.cleanup.model}
             />
             <button
+              type="button"
               class="btn btn-secondary btn-sm"
               onclick={fetchCleanupModels}
               disabled={fetchingModels}
@@ -462,6 +469,7 @@
             <p class="hint">Keeps the text available even if pasting fails.</p>
           </div>
           <button
+            type="button"
             class="switch"
             role="switch"
             aria-checked={config.paste.copy_to_clipboard}
@@ -476,8 +484,8 @@
       <div class="save-bar glass" role="status">
         <span class="save-dot"></span>
         <span class="save-text">Unsaved changes</span>
-        <button class="btn btn-ghost btn-sm" onclick={discard}>Discard</button>
-        <button class="btn btn-primary btn-sm" onclick={save} disabled={saving}>
+        <button type="button" class="btn btn-ghost btn-sm" onclick={discard}>Discard</button>
+        <button type="button" class="btn btn-primary btn-sm" onclick={save} disabled={saving}>
           {saving ? "Saving…" : "Save changes"}
         </button>
       </div>

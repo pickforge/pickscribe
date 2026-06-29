@@ -78,12 +78,19 @@ export interface DoctorCheck {
   detail: string;
 }
 
+export function desktopApiAvailable() {
+  return (
+    typeof window !== "undefined" &&
+    Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__)
+  );
+}
+
 export const api = {
   getState: () => invoke<StatePayload>("get_state"),
   toggleDictation: () => invoke<void>("toggle_dictation"),
   cancelDictation: () => invoke<void>("cancel_dictation"),
-  getConfig: () => invoke<AppConfig>("get_config"),
-  setConfig: (config: AppConfig) => invoke<AppConfig>("set_config", { config }),
+  getAppConfig: () => invoke<AppConfig>("get_app_config"),
+  updateAppConfig: (config: AppConfig) => invoke<AppConfig>("update_app_config", { config }),
   listHistory: (search = "", limit = 100, offset = 0) =>
     invoke<HistoryEntry[]>("list_history", { search, limit, offset }),
   deleteHistoryEntry: (id: number) => invoke<void>("delete_history_entry", { id }),
@@ -93,7 +100,7 @@ export const api = {
   listModels: () => invoke<string[]>("list_models"),
   listCleanupModels: (config: AppConfig) =>
     invoke<string[]>("list_cleanup_models", { config }),
-  showMain: () => invoke<void>("show_main"),
+  showMainWindow: () => invoke<void>("show_main_window"),
   toggleFloatButton: () => invoke<boolean>("toggle_float_button"),
   getSystemTheme: () => invoke<string>("get_system_theme"),
   copyText: (text: string) => invoke<void>("copy_text", { text }),

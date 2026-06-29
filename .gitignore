@@ -4,3 +4,6 @@
 node_modules/
 dist/
 src-tauri/gen/schemas/
+
+# Updater signing keys — never commit; set as CI secrets instead.
+src-tauri/pickscribe-updater.key*

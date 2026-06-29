@@ -98,6 +98,11 @@ html.is-float body {
   background: transparent;
 }
 
+body.float-host {
+  min-height: 0;
+  overflow: hidden;
+}
+
 #app {
   height: 100%;
 }
@@ -183,8 +188,12 @@ button {
     transform 150ms var(--ease-forge);
   white-space: nowrap;
 }
-.btn:active {
+.btn:active:not(:disabled) {
   transform: translateY(1px) scale(0.98);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 .btn:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--ember) 60%, transparent);
@@ -382,6 +391,15 @@ textarea.input {
 .switch[aria-checked="true"]::after {
   transform: translateX(16px);
   background: var(--ember);
+}
+
+/* ---------- blueprint grid texture ---------- */
+
+.bg-blueprint {
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--text) 3.5%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--text) 3.5%, transparent) 1px, transparent 1px);
+  background-size: 56px 56px;
 }
 
 /* ---------- motion ---------- */

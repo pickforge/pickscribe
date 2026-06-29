@@ -25,10 +25,25 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v6
+      - name: Verify tag matches app version
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          conf_version="$(jq -r '.version' src-tauri/tauri.conf.json)"
+          tag_version="${RELEASE_TAG#v}"
+          if [[ "$tag_version" != "$conf_version" ]]; then
+            echo "ERROR: tag $RELEASE_TAG (version $tag_version) does not match"
+            echo "src-tauri/tauri.conf.json version $conf_version."
+            echo "The updater manifest version would not match the bundle. Retag or"
+            echo "bump tauri.conf.json before releasing."
+            exit 1
+          fi
+          echo "Tag version $tag_version matches tauri.conf.json."
+
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: 24
-          cache: npm
+          bun-version: latest
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -51,22 +66,60 @@ jobs:
             wget
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       - name: Build Tauri bundles
         env:
           NO_STRIP: "1"
-        run: npm run tauri -- build --bundles deb,appimage
+          # Updater signing — set these repo secrets (handoff in the release docs).
+          # With `createUpdaterArtifacts`, this signs the AppImage updater bundle.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bun run tauri build --bundles deb,appimage
 
       - name: Collect release assets
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           mkdir -p release-assets
+
+          # Installer bundles for direct download.
           while IFS= read -r -d '' asset; do
             cp "$asset" release-assets/
           done < <(
             find target/release/bundle -type f \
               \( -name '*.AppImage' -o -name '*.deb' \) -print0
           )
+
+          # Updater artifact + signature (emitted by `createUpdaterArtifacts`).
+          # The exact name varies by Tauri version, so discover the .sig and
+          # derive the artifact + manifest from it. `version` comes from the tag
+          # (strip the leading v), which must match tauri.conf.json's version.
+          updater_active="$(jq -r '.bundle.createUpdaterArtifacts // false' src-tauri/tauri.conf.json)"
+          sig_path="$(find target/release/bundle -type f -name '*.sig' | head -1)"
+          if [[ -n "$sig_path" ]]; then
+            artifact_path="${sig_path%.sig}"
+            artifact_name="$(basename "$artifact_path")"
+            cp "$artifact_path" "$sig_path" release-assets/
+            jq -n \
+              --arg version "${RELEASE_TAG#v}" \
+              --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+              --arg signature "$(cat "$sig_path")" \
+              --arg url "https://github.com/pickforge/pickscribe/releases/download/${RELEASE_TAG}/${artifact_name}" \
+              '{version: $version, pub_date: $pub_date, platforms: {"linux-x86_64": {signature: $signature, url: $url}}}' \
+              > release-assets/latest.json
+            echo "Generated latest.json:"
+            cat release-assets/latest.json
+          elif [[ "$updater_active" == "true" ]]; then
+            echo "ERROR: updater artifacts are enabled (createUpdaterArtifacts=true) but"
+            echo "no .sig was produced, so no latest.json could be generated."
+            echo "Shipping would leave installed apps with a broken updater feed."
+            echo "Is TAURI_SIGNING_PRIVATE_KEY (and its password) set in repo secrets?"
+            exit 1
+          else
+            echo "WARNING: no updater signature found and updater artifacts are disabled — skipping latest.json."
+          fi
+
           asset_count="$(find release-assets -type f | wc -l | tr -d ' ')"
           if [[ "$asset_count" == "0" ]]; then
             echo "No release assets were produced."
@@ -91,7 +144,7 @@ jobs:
 
           PickScribe is Linux-first (PipeWire + whisper.cpp + ydotool). The
           bundles below are built and smoke-checked on Ubuntu; Arch/CachyOS
-          users can also build from source with `npm run tauri build`.
+          users can also build from source with `bun run tauri build`.
           EOF
           )"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then

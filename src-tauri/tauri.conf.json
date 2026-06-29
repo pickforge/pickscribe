@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.pickforge.pickscribe",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "bun run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -26,8 +26,17 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/pickforge/pickscribe/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM5RkREMjlBQTZEM0RFQTEKUldTaDN0T21tdEw5eVlPZTlNNlloQnFtVkp4M1RpYndKYUhYWXE0WWJZS09OVmZqbEJkS3FSazYK"
+    }
+  },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["deb", "appimage"],
     "icon": [
       "icons/32x32.png",

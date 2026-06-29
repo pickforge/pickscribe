@@ -75,7 +75,7 @@ pub fn setup(app: &tauri::App) -> tauri::Result<()> {
                 engine.toggle(app);
             }
             "cancel" => crate::engine::engine(app).cancel(app),
-            "show" => crate::show_main_window(app),
+            "show" => crate::focus_main_window(app),
             "float" => {
                 let mut cfg = AppConfig::load();
                 cfg.general.float_button = !cfg.general.float_button;

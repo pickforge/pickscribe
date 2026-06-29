@@ -44,14 +44,14 @@ fn cancel_dictation(app: AppHandle, engine: State<'_, Arc<Engine>>) {
 }
 
 #[tauri::command]
-fn get_config() -> AppConfig {
+fn get_app_config() -> AppConfig {
     AppConfig::load()
 }
 
 pub(crate) const EVENT_CONFIG: &str = "pickscribe://config";
 
 #[tauri::command]
-fn set_config(app: AppHandle, config: AppConfig) -> CommandResult<AppConfig> {
+fn update_app_config(app: AppHandle, config: AppConfig) -> CommandResult<AppConfig> {
     use tauri::Emitter;
     config.save().map_err(err_string)?;
     ensure_float_window(&app, config.general.float_button);
@@ -242,11 +242,11 @@ fn copy_text(text: String) -> CommandResult<()> {
 }
 
 #[tauri::command]
-fn show_main(app: AppHandle) {
-    show_main_window(&app);
+fn show_main_window(app: AppHandle) {
+    focus_main_window(&app);
 }
 
-pub(crate) fn show_main_window(app: &AppHandle) {
+pub(crate) fn focus_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
@@ -441,6 +441,8 @@ pub fn run() {
     tauri::Builder::default()
         .manage(engine)
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             Some(vec!["--hidden"]),
@@ -451,15 +453,15 @@ pub fn run() {
                 engine.set_chord_override(parse_chord_arg(&args));
                 engine.toggle(app);
             } else {
-                show_main_window(app);
+                focus_main_window(app);
             }
         }))
         .invoke_handler(tauri::generate_handler![
             get_state,
             toggle_dictation,
             cancel_dictation,
-            get_config,
-            set_config,
+            get_app_config,
+            update_app_config,
             list_history,
             delete_history_entry,
             clear_history,
@@ -470,7 +472,7 @@ pub fn run() {
             toggle_float_button,
             get_system_theme,
             copy_text,
-            show_main,
+            show_main_window,
         ])
         .setup(|app| {
             tray::setup(app)?;

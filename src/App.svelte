@@ -1,11 +1,13 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import Microphone from "phosphor-svelte/lib/Microphone";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { onMount } from "svelte";
   import ClockCounterClockwise from "phosphor-svelte/lib/ClockCounterClockwise";
   import GearSix from "phosphor-svelte/lib/GearSix";
+  import Microphone from "phosphor-svelte/lib/Microphone";
   import {
     api,
+    desktopApiAvailable,
     EVENT_HISTORY,
     EVENT_LEVEL,
     EVENT_STATE,
@@ -14,6 +16,7 @@
   import Dashboard from "./lib/views/Dashboard.svelte";
   import History from "./lib/views/History.svelte";
   import Settings from "./lib/views/Settings.svelte";
+  import { checkForUpdates } from "./lib/updater";
 
   type View = "dashboard" | "history" | "settings";
 
@@ -23,33 +26,6 @@
   let settingsDirty = $state(false);
   let pendingView = $state<View | null>(null);
   let settingsActions: { save: () => Promise<boolean>; discard: () => void } | null = null;
-
-  function navigate(target: View) {
-    if (view === "settings" && settingsDirty && target !== "settings") {
-      pendingView = target;
-      return;
-    }
-    view = target;
-  }
-
-  async function saveAndContinue() {
-    if (!settingsActions || !pendingView) return;
-    if (await settingsActions.save()) {
-      view = pendingView;
-      pendingView = null;
-    } else {
-      // Save failed; stay on settings so the error is visible.
-      pendingView = null;
-    }
-  }
-
-  function discardAndContinue() {
-    if (!pendingView) return;
-    settingsActions?.discard();
-    settingsDirty = false;
-    view = pendingView;
-    pendingView = null;
-  }
   let dictation = $state<StatePayload>({
     stage: "idle",
     recording_started_ms: null,
@@ -60,8 +36,77 @@
   let levels = $state<number[]>(Array(LEVEL_BARS).fill(0));
   let historyVersion = $state(0);
 
+  const navItems: { id: View; label: string; icon: typeof Microphone }[] = [
+    { id: "dashboard", label: "Dictate", icon: Microphone },
+    { id: "history", label: "History", icon: ClockCounterClockwise },
+    { id: "settings", label: "Settings", icon: GearSix },
+  ];
+
+  const active = $derived(dictation.stage !== "idle");
+
+  function navigate(target: View) {
+    if (view === "settings" && settingsDirty && target !== "settings") {
+      pendingView = target;
+      return;
+    }
+    view = target;
+  }
+
+  async function saveAndContinue() {
+    if (!settingsActions || !pendingView) {
+      return;
+    }
+    if (await settingsActions.save()) {
+      view = pendingView;
+    }
+    pendingView = null;
+  }
+
+  function discardAndContinue() {
+    if (!pendingView) {
+      return;
+    }
+    settingsActions?.discard();
+    settingsDirty = false;
+    view = pendingView;
+    pendingView = null;
+  }
+
   onMount(() => {
+    if (!desktopApiAvailable()) {
+      return;
+    }
+
     const unsubs: Array<() => void> = [];
+
+    // Autostart's "Launch at login" starts the app `--hidden`, which hides the
+    // main window — so a blocking update confirm() must not pop from an
+    // invisible webview. Only this main window runs the check (the float capsule
+    // mounts Float, not App), and only while visible; otherwise defer it until
+    // the window is first shown.
+    let updateCheckDone = false;
+    const runUpdateCheck = () => {
+      if (updateCheckDone) {
+        return;
+      }
+      updateCheckDone = true;
+      void checkForUpdates();
+    };
+    const mainWindow = getCurrentWindow();
+    void mainWindow.isVisible().then((visible) => {
+      if (visible) {
+        runUpdateCheck();
+        return;
+      }
+      mainWindow
+        .onFocusChanged(({ payload: focused }) => {
+          if (focused) {
+            runUpdateCheck();
+          }
+        })
+        .then((u) => unsubs.push(u));
+    });
+
     api.getState().then((s) => (dictation = s)).catch(() => {});
     listen<StatePayload>(EVENT_STATE, (event) => {
       dictation = event.payload;
@@ -77,67 +122,63 @@
     }).then((u) => unsubs.push(u));
     return () => unsubs.forEach((u) => u());
   });
-
-  const navItems: { id: View; label: string }[] = [
-    { id: "dashboard", label: "Dictate" },
-    { id: "history", label: "History" },
-    { id: "settings", label: "Settings" },
-  ];
 </script>
 
-<div class="shell">
-  <aside class="sidebar">
-    <div class="brand">
-      <img src="/brand/pickscribe-mark-128.svg" alt="PickScribe" width="34" height="34" />
-      <div class="brand-text">
-        <span class="brand-name">PickScribe</span>
-        <span class="brand-sub">PICKFORGE STUDIO</span>
-      </div>
+<div class="app bg-blueprint">
+  <header class="chrome">
+    <div class="chrome-dots" aria-hidden="true">
+      <span></span>
+      <span></span>
+      <span></span>
     </div>
+    <span class="chrome-title">Pickscribe · Dictation</span>
+    <span class="pill" class:ember={active}>
+      <span class="dot" class:pulse={active}></span>
+      {dictation.stage}
+    </span>
+  </header>
 
-    <nav class="nav">
-      {#each navItems as item (item.id)}
-        <button
-          class="nav-item"
-          class:active={view === item.id}
-          onclick={() => navigate(item.id)}
-        >
-          {#if item.id === "dashboard"}
-            <Microphone size={17} weight={view === item.id ? "fill" : "regular"} />
-          {:else if item.id === "history"}
-            <ClockCounterClockwise size={17} weight={view === item.id ? "fill" : "regular"} />
-          {:else}
-            <GearSix size={17} weight={view === item.id ? "fill" : "regular"} />
-          {/if}
-          {item.label}
-          {#if item.id === "settings" && settingsDirty}
-            <span class="dirty-dot" title="Unsaved changes"></span>
-          {/if}
-        </button>
-      {/each}
-    </nav>
+  <div class="body">
+    <aside class="sidebar">
+      <img class="mark" src="/brand/pickscribe-mark-128.svg" alt="PickScribe mark" />
+      <nav aria-label="Main navigation">
+        {#each navItems as item (item.id)}
+          <button
+            class="nav-btn"
+            class:active={view === item.id}
+            type="button"
+            onclick={() => navigate(item.id)}
+          >
+            {#if item.id === "settings" && settingsDirty}
+              <span class="dirty-dot" title="Unsaved changes"></span>
+            {/if}
+            <item.icon size={17} weight={view === item.id ? "fill" : "regular"} />
+            {item.label}
+          </button>
+        {/each}
+      </nav>
+    </aside>
 
-    <footer class="side-foot">
-      <span class="pill" class:ember={dictation.stage !== "idle"}>
-        {#if dictation.stage !== "idle"}<span class="dot pulse"></span>{/if}
-        {dictation.stage}
-      </span>
-      <p class="local-note">Local-first dictation</p>
-    </footer>
-  </aside>
+    <main class="content fade-up">
+      {#if view === "dashboard"}
+        <Dashboard {dictation} {levels} {historyVersion} />
+      {:else if view === "history"}
+        <History {historyVersion} />
+      {:else}
+        <Settings
+          onDirtyChange={(dirty) => (settingsDirty = dirty)}
+          bindActions={(actions) => (settingsActions = actions)}
+        />
+      {/if}
+    </main>
+  </div>
 
-  <main class="content">
-    {#if view === "dashboard"}
-      <Dashboard {dictation} {levels} {historyVersion} />
-    {:else if view === "history"}
-      <History {historyVersion} />
-    {:else}
-      <Settings
-        onDirtyChange={(dirty) => (settingsDirty = dirty)}
-        bindActions={(actions) => (settingsActions = actions)}
-      />
-    {/if}
-  </main>
+  <footer class="footer">
+    <span class="status" class:error={Boolean(dictation.error)}>
+      {dictation.error ?? dictation.message ?? "Local-first dictation"}
+    </span>
+    <span class="brand-line">© Pickforge · pickforge.dev · MIT</span>
+  </footer>
 </div>
 
 {#if pendingView}
@@ -153,118 +194,130 @@
       <h3>Unsaved settings</h3>
       <p>You changed settings but haven't saved them yet.</p>
       <div class="dialog-actions">
-        <button class="btn btn-ghost btn-sm" onclick={() => (pendingView = null)}>
+        <button class="btn btn-ghost btn-sm" type="button" onclick={() => (pendingView = null)}>
           Keep editing
         </button>
-        <button class="btn btn-danger btn-sm" onclick={discardAndContinue}>Discard</button>
-        <button class="btn btn-primary btn-sm" onclick={saveAndContinue}>Save and continue</button>
+        <button class="btn btn-danger btn-sm" type="button" onclick={discardAndContinue}>
+          Discard
+        </button>
+        <button class="btn btn-primary btn-sm" type="button" onclick={saveAndContinue}>
+          Save and continue
+        </button>
       </div>
     </div>
   </div>
 {/if}
 
 <style>
-  .shell {
-    display: grid;
-    grid-template-columns: 216px minmax(0, 1fr);
+  .app {
+    display: flex;
+    flex-direction: column;
     height: 100vh;
+    background-color: var(--surface);
+  }
+
+  .chrome {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex: none;
+    height: 44px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--hairline);
+    background: color-mix(in srgb, var(--surface) 75%, transparent);
+  }
+
+  .chrome-dots {
+    display: flex;
+    gap: 6px;
+  }
+
+  .chrome-dots span {
+    width: 6px;
+    height: 6px;
+    border-radius: var(--radius-pill);
+    background: color-mix(in srgb, var(--text) 15%, transparent);
+  }
+
+  .chrome-title {
+    flex: 1;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
   }
 
   .sidebar {
     display: flex;
     flex-direction: column;
-    gap: 24px;
-    padding: 22px 14px;
+    gap: 20px;
+    flex: none;
+    width: 176px;
+    padding: 18px 12px;
     border-right: 1px solid var(--hairline);
-    background: var(--surface-1);
+    background: color-mix(in srgb, var(--surface-1) 55%, transparent);
   }
 
-  .brand {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 0 8px;
+  .mark {
+    width: 34px;
+    height: 34px;
+    margin-left: 6px;
   }
 
-  .brand-text {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-  }
-
-  .brand-name {
-    font-size: 15px;
-    font-weight: 700;
-    letter-spacing: -0.02em;
-  }
-
-  .brand-sub {
-    font-family: var(--font-mono);
-    font-size: 8.5px;
-    letter-spacing: 0.18em;
-    color: var(--muted);
-  }
-
-  .nav {
+  nav {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    flex: 1;
   }
 
-  .nav-item {
+  .nav-btn {
     display: flex;
     align-items: center;
     gap: 10px;
-    height: 38px;
+    height: 36px;
     padding: 0 12px;
     border: none;
-    border-radius: 10px;
+    border-radius: 9px;
     background: transparent;
-    color: color-mix(in srgb, var(--text) 65%, transparent);
-    font-size: 13.5px;
+    color: var(--muted);
+    font-size: 13px;
     font-weight: 600;
     letter-spacing: -0.01em;
     cursor: pointer;
     transition:
-      background 300ms var(--ease-forge),
-      color 300ms var(--ease-forge);
+      background 0.3s var(--ease-forge),
+      color 0.3s var(--ease-forge);
   }
-  .nav-item:hover {
+
+  .nav-btn:hover {
     color: var(--text);
     background: var(--wash);
   }
-  .nav-item.active {
+
+  .nav-btn.active {
     color: var(--ember);
     background: color-mix(in srgb, var(--ember) 8%, transparent);
   }
 
-  .side-foot {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
-    padding: 0 8px;
-  }
-
-  .local-note {
-    font-size: 11px;
-    color: var(--muted);
-  }
-
-  .content {
-    overflow-y: auto;
-    padding: 28px 32px 40px;
+  .nav-btn:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--ember) 60%, transparent);
+    outline-offset: -2px;
   }
 
   .dirty-dot {
     width: 7px;
     height: 7px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: var(--ember);
     flex: none;
-    margin-left: auto;
-    margin-right: 2px;
+    margin-left: -4px;
     animation: ember-pulse 2.4s var(--ease-forge) infinite;
   }
 
@@ -322,5 +375,68 @@
     justify-content: flex-end;
     gap: 8px;
     margin-top: 12px;
+  }
+
+  .content {
+    flex: 1;
+    min-width: 0;
+    overflow-y: auto;
+    padding: 24px 28px 32px;
+  }
+
+  .footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex: none;
+    height: 34px;
+    padding: 0 16px;
+    border-top: 1px solid var(--hairline);
+    background: color-mix(in srgb, var(--surface) 75%, transparent);
+  }
+
+  .status {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .status.error {
+    color: var(--bad);
+  }
+
+  .brand-line {
+    flex: none;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    color: var(--muted);
+  }
+
+  @media (max-width: 700px) {
+    .sidebar {
+      width: 60px;
+      padding: 18px 8px;
+      align-items: center;
+    }
+
+    .mark {
+      margin-left: 0;
+    }
+
+    .nav-btn {
+      justify-content: center;
+      width: 44px;
+      padding: 0;
+      font-size: 0;
+      gap: 0;
+    }
+
+    .content {
+      padding: 18px 14px 24px;
+    }
   }
 </style>
