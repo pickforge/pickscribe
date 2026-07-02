@@ -7,8 +7,8 @@ Repo-local guide for agents working in PickScribe — local dictation for Linux
 
 - `bun install` then `bun run tauri dev` to develop.
 - `bun run check` type-checks the Svelte frontend (`build` alone is just
-  `vite build`); `cargo test --manifest-path src-tauri/Cargo.toml` covers the
-  Rust side. Run both before calling work done.
+  `vite build`); `cargo test --workspace` covers the Rust side
+  (the root package and `src-tauri` are one workspace, matching CI). Run both before calling work done.
 
 ## Invariants
 
