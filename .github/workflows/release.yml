@@ -91,22 +91,56 @@ jobs:
               \( -name '*.AppImage' -o -name '*.deb' \) -print0
           )
 
-          # Updater artifact + signature (emitted by `createUpdaterArtifacts`).
-          # The exact name varies by Tauri version, so discover the .sig and
-          # derive the artifact + manifest from it. `version` comes from the tag
-          # (strip the leading v), which must match tauri.conf.json's version.
+          # Updater artifacts + signatures (emitted by `createUpdaterArtifacts`).
+          # The exact names vary by Tauri version, so discover the .sig files and
+          # derive the artifacts + manifest from them. `version` comes from the
+          # tag (strip the leading v), which must match tauri.conf.json's version.
           updater_active="$(jq -r '.bundle.createUpdaterArtifacts // false' src-tauri/tauri.conf.json)"
-          sig_path="$(find target/release/bundle -type f -name '*.sig' | head -1)"
-          if [[ -n "$sig_path" ]]; then
-            artifact_path="${sig_path%.sig}"
-            artifact_name="$(basename "$artifact_path")"
-            cp "$artifact_path" "$sig_path" release-assets/
+          mapfile -d '' sig_paths < <(
+            find target/release/bundle -type f -name '*.sig' -print0 | sort -z
+          )
+
+          if (( ${#sig_paths[@]} > 0 )); then
+            platforms_json="{}"
+            appimage_sig_found="false"
+
+            for sig_path in "${sig_paths[@]}"; do
+              artifact_path="${sig_path%.sig}"
+              artifact_name="$(basename "$artifact_path")"
+              cp "$artifact_path" "$sig_path" release-assets/
+
+              if [[ "$artifact_path" == *.AppImage ]]; then
+                appimage_sig_found="true"
+                platforms_json="$(
+                  jq -n \
+                    --argjson platforms "$platforms_json" \
+                    --arg signature "$(cat "$sig_path")" \
+                    --arg url "https://github.com/pickforge/pickscribe/releases/download/${RELEASE_TAG}/${artifact_name}" \
+                    '$platforms + {"linux-x86_64": {signature: $signature, url: $url}, "linux-x86_64-appimage": {signature: $signature, url: $url}}'
+                )"
+              elif [[ "$artifact_path" == *.deb ]]; then
+                platforms_json="$(
+                  jq -n \
+                    --argjson platforms "$platforms_json" \
+                    --arg signature "$(cat "$sig_path")" \
+                    --arg url "https://github.com/pickforge/pickscribe/releases/download/${RELEASE_TAG}/${artifact_name}" \
+                    '$platforms + {"linux-x86_64-deb": {signature: $signature, url: $url}}'
+                )"
+              fi
+            done
+
+            if [[ "$updater_active" == "true" && "$appimage_sig_found" != "true" ]]; then
+              echo "ERROR: updater artifacts are enabled (createUpdaterArtifacts=true) but"
+              echo "no AppImage .sig was produced, so no AppImage updater feed could be generated."
+              echo "Shipping would leave AppImage installs with a broken updater feed."
+              exit 1
+            fi
+
             jq -n \
               --arg version "${RELEASE_TAG#v}" \
               --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-              --arg signature "$(cat "$sig_path")" \
-              --arg url "https://github.com/pickforge/pickscribe/releases/download/${RELEASE_TAG}/${artifact_name}" \
-              '{version: $version, pub_date: $pub_date, platforms: {"linux-x86_64": {signature: $signature, url: $url}}}' \
+              --argjson platforms "$platforms_json" \
+              '{version: $version, pub_date: $pub_date, platforms: $platforms}' \
               > release-assets/latest.json
             echo "Generated latest.json:"
             cat release-assets/latest.json

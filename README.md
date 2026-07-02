@@ -59,6 +59,10 @@ On Wayland the app runs natively (smooth WebKitGTK scrolling). The floating butt
 
 ## Install
 
+Download the latest `.deb` or `.AppImage` from [Releases](https://github.com/pickforge/pickscribe/releases/latest). PickScribe ships Linux only: install the `.deb` with your package manager, or `chmod +x` the `.AppImage` and run it. Updates arrive through the in-app updater.
+
+### From source
+
 Install system dependencies on Arch/CachyOS:
 
 ```bash
@@ -310,8 +314,7 @@ See [`FULL_APP_PLAN.md`](FULL_APP_PLAN.md) for the full product plan, including:
 - terminal auto-detection;
 - tray/daemon mode;
 - native audio capture;
-- embedded/warm Whisper backend;
-- release packaging.
+- embedded/warm Whisper backend.
 
 ## Development
 
