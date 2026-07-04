@@ -7,6 +7,9 @@ set -eu
 REPO="pickforge/pickscribe"
 APP_NAME="PickScribe"
 BIN_NAME="pickscribe-app"
+# The window's app_id (bundle identifier). The .desktop basename and
+# StartupWMClass must equal it or the running window shows a generic icon.
+APP_ID="pickscribe-app"
 
 # Environment overrides:
 #   PICKSCRIBE_INSTALL_DIR  Linux AppImage target dir. Default: $HOME/.local/bin.
@@ -154,6 +157,11 @@ path_must_be_in_home() {
   checked_path=$1
 
   case "$checked_path" in
+    *..*)
+      die "install path must not contain '..': $checked_path"
+      ;;
+  esac
+  case "$checked_path" in
     "$HOME"|"$HOME"/*)
       ;;
     *)
@@ -188,13 +196,17 @@ download_asset() {
 write_desktop_launcher() {
   launcher_appimage=$1
   launcher_dir="$HOME/.local/share/applications"
-  launcher_file="$launcher_dir/$BIN_NAME.desktop"
+  # Basename and StartupWMClass must equal the window's app_id so the desktop
+  # environment ties the running window to this entry (and its icon).
+  launcher_file="$launcher_dir/$APP_ID.desktop"
 
   mkdir -p "$launcher_dir" 2>/dev/null || return 0
   {
     printf '[Desktop Entry]\n'
     printf 'Name=%s\n' "$APP_NAME"
     printf 'Exec="%s"\n' "$launcher_appimage"
+    printf 'Icon=%s\n' "$APP_ID"
+    printf 'StartupWMClass=%s\n' "$APP_ID"
     printf 'Terminal=false\n'
     printf 'Type=Application\n'
     printf 'Categories=Development;\n'
