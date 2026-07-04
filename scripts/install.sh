@@ -46,19 +46,21 @@ fetch_stdout() {
     return
   fi
 
-  # A token is set: pass the Authorization header through a private config file,
-  # never as a command-line argument. Process arguments are world-readable via
-  # `ps` on multi-user systems, so a token on argv would leak to other users.
+  # A token is set: never put it in argv (world-readable via `ps`). curl reads
+  # its config from stdin, so no file touches disk. wget needs a file, so use a
+  # private temp file removed even if the fetch is interrupted.
+  if [ "$downloader" = "curl" ]; then
+    printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" |
+      curl -fsSL -H "$accept" -K - "$fetch_url"
+    return
+  fi
+
   auth_conf=$(mktemp "${TMPDIR:-/tmp}/${BIN_NAME}-auth.XXXXXX") ||
     die "could not create a temporary file for the auth header"
+  trap 'rm -f "$auth_conf"' EXIT INT TERM
+  printf 'header = Authorization: Bearer %s\n' "$GITHUB_TOKEN" > "$auth_conf"
   fetch_status=0
-  if [ "$downloader" = "curl" ]; then
-    printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" > "$auth_conf"
-    curl -fsSL -H "$accept" -K "$auth_conf" "$fetch_url" || fetch_status=$?
-  else
-    printf 'header = Authorization: Bearer %s\n' "$GITHUB_TOKEN" > "$auth_conf"
-    wget -qO- --config="$auth_conf" --header="$accept" "$fetch_url" || fetch_status=$?
-  fi
+  wget -qO- --config="$auth_conf" --header="$accept" "$fetch_url" || fetch_status=$?
   rm -f "$auth_conf"
   return "$fetch_status"
 }
@@ -195,7 +197,7 @@ download_asset() {
 
 write_desktop_launcher() {
   launcher_appimage=$1
-  launcher_dir="$HOME/.local/share/applications"
+  launcher_dir="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
   # Basename and StartupWMClass must equal the window's app_id so the desktop
   # environment ties the running window to this entry (and its icon).
   launcher_file="$launcher_dir/$APP_ID.desktop"
