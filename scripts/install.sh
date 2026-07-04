@@ -6,7 +6,7 @@ set -eu
 
 REPO="pickforge/pickscribe"
 APP_NAME="PickScribe"
-BIN_NAME="pickscribe-desktop"
+BIN_NAME="pickscribe-app"
 
 # Environment overrides:
 #   PICKSCRIBE_INSTALL_DIR  Linux AppImage target dir. Default: $HOME/.local/bin.
@@ -32,30 +32,32 @@ preflight() {
 
 fetch_stdout() {
   fetch_url=$1
+  accept="Accept: application/vnd.github+json"
 
-  if [ "$downloader" = "curl" ]; then
-    if [ -n "${GITHUB_TOKEN:-}" ]; then
-      curl -fsSL \
-        -H "Accept: application/vnd.github+json" \
-        -H "Authorization: Bearer $GITHUB_TOKEN" \
-        "$fetch_url"
+  if [ -z "${GITHUB_TOKEN:-}" ]; then
+    if [ "$downloader" = "curl" ]; then
+      curl -fsSL -H "$accept" "$fetch_url"
     else
-      curl -fsSL \
-        -H "Accept: application/vnd.github+json" \
-        "$fetch_url"
+      wget -qO- --header="$accept" "$fetch_url"
     fi
-  else
-    if [ -n "${GITHUB_TOKEN:-}" ]; then
-      wget -qO- \
-        --header="Accept: application/vnd.github+json" \
-        --header="Authorization: Bearer $GITHUB_TOKEN" \
-        "$fetch_url"
-    else
-      wget -qO- \
-        --header="Accept: application/vnd.github+json" \
-        "$fetch_url"
-    fi
+    return
   fi
+
+  # A token is set: pass the Authorization header through a private config file,
+  # never as a command-line argument. Process arguments are world-readable via
+  # `ps` on multi-user systems, so a token on argv would leak to other users.
+  auth_conf=$(mktemp "${TMPDIR:-/tmp}/${BIN_NAME}-auth.XXXXXX") ||
+    die "could not create a temporary file for the auth header"
+  fetch_status=0
+  if [ "$downloader" = "curl" ]; then
+    printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" > "$auth_conf"
+    curl -fsSL -H "$accept" -K "$auth_conf" "$fetch_url" || fetch_status=$?
+  else
+    printf 'header = Authorization: Bearer %s\n' "$GITHUB_TOKEN" > "$auth_conf"
+    wget -qO- --config="$auth_conf" --header="$accept" "$fetch_url" || fetch_status=$?
+  fi
+  rm -f "$auth_conf"
+  return "$fetch_status"
 }
 
 download_to() {
