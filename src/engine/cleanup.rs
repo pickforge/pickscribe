@@ -207,6 +207,7 @@ mod tests {
         let mut cfg = AppConfig::default();
         cfg.general.local_only = true;
         cfg.cleanup.provider = "ollama".into();
+        cfg.cleanup.endpoint = "http://127.0.0.1:11434/v1/chat/completions".into();
         cfg.cleanup.model = "deepseek-v4-flash:cloud".into();
         let err = resolve_target(&cfg).unwrap_err().to_string();
         assert!(err.contains(":cloud"), "unexpected error: {err}");
@@ -228,6 +229,41 @@ mod tests {
         assert_eq!(
             models_url("http://127.0.0.1:1234/v1"),
             "http://127.0.0.1:1234/v1/models"
+        );
+    }
+
+    #[test]
+    fn clean_returns_raw_transcript_when_cleanup_is_disabled() {
+        let mut cfg = AppConfig::default();
+        cfg.cleanup.provider = "none".into();
+
+        let outcome = clean(&cfg, "raw transcript");
+
+        assert_eq!(outcome.text, "raw transcript");
+        assert_eq!(outcome.provider, "none");
+        assert!(!outcome.cleaned);
+        assert!(outcome.error.is_none());
+    }
+
+    #[test]
+    fn clean_falls_back_to_raw_transcript_when_target_resolution_fails() {
+        let mut cfg = AppConfig::default();
+        cfg.general.local_only = true;
+        cfg.cleanup.provider = "custom".into();
+        cfg.cleanup.endpoint = "https://example.com/v1/chat/completions".into();
+        cfg.cleanup.model = "remote-model".into();
+
+        let outcome = clean(&cfg, "keep this");
+
+        assert_eq!(outcome.text, "keep this");
+        assert_eq!(outcome.provider, "custom");
+        assert_eq!(outcome.model, "remote-model");
+        assert!(!outcome.cleaned);
+        assert!(
+            outcome
+                .error
+                .as_deref()
+                .is_some_and(|err| err.contains("local-only mode blocks remote endpoint"))
         );
     }
 }

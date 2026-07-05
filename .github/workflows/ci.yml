@@ -16,7 +16,7 @@ jobs:
   check:
     name: Check and build
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
 
@@ -25,6 +25,8 @@ jobs:
           bun-version: latest
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - uses: taiki-e/install-action@cargo-llvm-cov
 
       - uses: Swatinem/rust-cache@v2
 
@@ -46,11 +48,72 @@ jobs:
       - name: Svelte type check
         run: bun run check
 
+      - name: Frontend tests
+        run: bun run test
+
+      - name: Frontend coverage
+        run: bun run test:coverage
+
       - name: Build frontend
         run: bun run build
 
       - name: Rust tests
-        run: cargo test --workspace
+        run: cargo test --workspace --locked --all-targets
+
+      - name: Rust coverage
+        run: |
+          mkdir -p target/llvm-cov
+          cargo llvm-cov --workspace --locked --all-targets --fail-under-lines 17 --lcov --output-path target/llvm-cov/lcov.info
+          cargo llvm-cov report --html
+          cargo llvm-cov report --text --output-path target/llvm-cov/summary.txt
+
+      - name: Upload frontend coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-coverage
+          path: coverage/
+          if-no-files-found: warn
+
+      - name: Upload Rust coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-coverage
+          path: |
+            target/llvm-cov/html/
+            target/llvm-cov/lcov.info
+            target/llvm-cov/summary.txt
+          if-no-files-found: warn
+
+      - name: Write coverage summary
+        if: always()
+        shell: bash
+        run: |
+          summarize_lcov() {
+            local file="$1"
+            if [[ ! -f "$file" ]]; then
+              echo "not generated"
+              return
+            fi
+            awk '
+              /^LF:/ { lines += substr($0, 4) }
+              /^LH:/ { hit += substr($0, 4) }
+              END {
+                if (lines > 0) {
+                  printf "%.2f%% (%d/%d)", hit * 100 / lines, hit, lines
+                } else {
+                  printf "no line data"
+                }
+              }
+            ' "$file"
+          }
+
+          {
+            echo "## Coverage"
+            echo "- Frontend lines: $(summarize_lcov coverage/lcov.info)"
+            echo "- Rust lines: $(summarize_lcov target/llvm-cov/lcov.info)"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Rust check (workspace)
         run: cargo check --workspace --all-targets

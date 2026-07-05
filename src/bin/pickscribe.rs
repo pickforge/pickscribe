@@ -1137,3 +1137,30 @@ fn shell_escape(value: &str) -> String {
     }
     format!("'{}'", value.replace('\'', "'\\''"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cleanup_transcript_strips_whisper_timestamps_and_markers() {
+        let transcript = "
+            [00:00:00.000 --> 00:00:01.000] hello there
+            [BLANK_AUDIO]
+            [00:00:01.000 --> 00:00:02.000] general kenobi
+            (music)
+        ";
+
+        assert_eq!(
+            cleanup_transcript(transcript),
+            "hello there general kenobi"
+        );
+    }
+
+    #[test]
+    fn cleanup_transcript_trims_and_joins_plain_lines() {
+        let transcript = " first line\n\nsecond line \n[inaudible]\n";
+
+        assert_eq!(cleanup_transcript(transcript), "first line second line");
+    }
+}

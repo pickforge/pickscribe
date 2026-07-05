@@ -169,11 +169,17 @@ impl AppConfig {
     /// process env > ~/.config/pickscribe/env > config.toml.
     pub fn resolve_api_key(&self, provider: &str) -> Option<String> {
         let env_file = read_env_file();
+        self.resolve_api_key_from_sources(provider, &env_file, lookup_env)
+    }
+
+    fn resolve_api_key_from_sources(
+        &self,
+        provider: &str,
+        env_file: &HashMap<String, String>,
+        process_env: impl Fn(&str) -> Option<String>,
+    ) -> Option<String> {
         let lookup = |name: &str| -> Option<String> {
-            std::env::var(name)
-                .ok()
-                .filter(|v| !v.is_empty())
-                .or_else(|| env_file.get(name).cloned())
+            process_env(name).or_else(|| env_file.get(name).cloned())
         };
         let key = match provider {
             "deepseek" => lookup("DEEPSEEK_API_KEY").or_else(|| lookup("PICKSCRIBE_API_KEY")),
@@ -220,11 +226,15 @@ impl AppConfig {
 /// Parse `export KEY="value"` / `KEY=value` lines from ~/.config/pickscribe/env
 /// (the file sourced by the CLI wrappers) so the GUI shares credentials.
 pub fn read_env_file() -> HashMap<String, String> {
-    let mut map = HashMap::new();
     let path = config_dir().join("env");
     let Ok(raw) = fs::read_to_string(path) else {
-        return map;
+        return HashMap::new();
     };
+    parse_env_file(&raw)
+}
+
+fn parse_env_file(raw: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
     for line in raw.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -247,4 +257,80 @@ pub fn read_env_file() -> HashMap<String, String> {
         map.insert(key.to_string(), value);
     }
     map
+}
+
+fn lookup_env(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn read_env_file_parses_supported_shell_assignments() {
+        let env_file = parse_env_file(
+            r#"
+                # ignored
+                export DEEPSEEK_API_KEY="deepseek file"
+                OPENAI_API_KEY='openai file'
+                PICKSCRIBE_API_KEY= fallback
+                BAD-KEY=no
+                MISSING
+                EMPTY_KEY=
+            "#,
+        );
+
+        assert_eq!(
+            env_file.get("DEEPSEEK_API_KEY").map(String::as_str),
+            Some("deepseek file")
+        );
+        assert_eq!(
+            env_file.get("OPENAI_API_KEY").map(String::as_str),
+            Some("openai file")
+        );
+        assert_eq!(
+            env_file.get("PICKSCRIBE_API_KEY").map(String::as_str),
+            Some("fallback")
+        );
+        assert_eq!(env_file.get("EMPTY_KEY").map(String::as_str), Some(""));
+        assert!(!env_file.contains_key("BAD-KEY"));
+        assert!(!env_file.contains_key("MISSING"));
+    }
+
+    #[test]
+    fn resolve_api_key_prefers_process_env_then_env_file_then_config() {
+        let env_file = HashMap::from([
+            ("DEEPSEEK_API_KEY".to_string(), "file-deepseek".to_string()),
+            ("PICKSCRIBE_API_KEY".to_string(), "file-generic".to_string()),
+        ]);
+        let mut cfg = AppConfig::default();
+        cfg.cleanup.api_key = "config-key".into();
+
+        assert_eq!(
+            cfg.resolve_api_key_from_sources("deepseek", &env_file, |key| {
+                (key == "DEEPSEEK_API_KEY").then(|| "process-deepseek".to_string())
+            })
+            .as_deref(),
+            Some("process-deepseek")
+        );
+
+        assert_eq!(
+            cfg.resolve_api_key_from_sources("deepseek", &env_file, |_| None)
+                .as_deref(),
+            Some("file-deepseek")
+        );
+        assert_eq!(
+            cfg.resolve_api_key_from_sources("openai", &env_file, |_| None)
+                .as_deref(),
+            Some("file-generic")
+        );
+
+        assert_eq!(
+            cfg.resolve_api_key_from_sources("openai", &HashMap::new(), |_| None)
+                .as_deref(),
+            Some("config-key")
+        );
+    }
 }
