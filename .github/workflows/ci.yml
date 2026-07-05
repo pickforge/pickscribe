@@ -64,7 +64,7 @@ jobs:
         run: |
           mkdir -p target/llvm-cov
           cargo llvm-cov --workspace --locked --all-targets --fail-under-lines 17 --lcov --output-path target/llvm-cov/lcov.info
-          cargo llvm-cov report --html --output-dir target/llvm-cov
+          cargo llvm-cov report --html
           cargo llvm-cov report --text --output-path target/llvm-cov/summary.txt
 
       - name: Upload frontend coverage
