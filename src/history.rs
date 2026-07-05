@@ -233,3 +233,82 @@ impl HistoryDb {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_db_path(name: &str) -> std::path::PathBuf {
+        let id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("pickscribe-{name}-{id}.db"))
+    }
+
+    #[test]
+    fn metrics_aggregate_sessions_words_durations_and_recent_days() -> Result<()> {
+        let path = temp_db_path("history-metrics");
+        let db = HistoryDb::open(&path)?;
+
+        db.insert(&NewEntry {
+            duration_ms: 1_000,
+            raw_text: "one two three".into(),
+            cleaned_text: None,
+            provider: "none".into(),
+            model: String::new(),
+            language: "en".into(),
+        })?;
+        db.insert(&NewEntry {
+            duration_ms: 2_000,
+            raw_text: "raw text ignored".into(),
+            cleaned_text: Some("four five six seven".into()),
+            provider: "ollama".into(),
+            model: "qwen".into(),
+            language: "en".into(),
+        })?;
+
+        let metrics = db.metrics(70)?;
+
+        assert_eq!(metrics.sessions, 2);
+        assert_eq!(metrics.words, 7);
+        assert_eq!(metrics.speaking_ms, 3_000);
+        assert_eq!(metrics.longest_session_ms, 2_000);
+        assert_eq!(metrics.avg_words_per_session, 3.5);
+        assert!((metrics.minutes_saved - 0.05).abs() < 0.0001);
+        assert_eq!(metrics.days.iter().map(|day| day.sessions).sum::<i64>(), 2);
+        assert_eq!(metrics.days.iter().map(|day| day.words).sum::<i64>(), 7);
+
+        let entries = db.list("", 10, 0)?;
+        assert!(entries.iter().any(|entry| entry.word_count == 3));
+        assert!(entries.iter().any(|entry| entry.word_count == 4));
+
+        std::fs::remove_file(path).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn metrics_handles_zero_typing_wpm_without_dividing_by_zero() -> Result<()> {
+        let path = temp_db_path("history-zero-wpm");
+        let db = HistoryDb::open(&path)?;
+
+        db.insert(&NewEntry {
+            duration_ms: 60_000,
+            raw_text: "one two".into(),
+            cleaned_text: None,
+            provider: "none".into(),
+            model: String::new(),
+            language: "en".into(),
+        })?;
+
+        let metrics = db.metrics(0)?;
+
+        assert_eq!(metrics.typing_wpm, 0);
+        assert_eq!(metrics.words, 2);
+        assert_eq!(metrics.minutes_saved, 1.0);
+
+        std::fs::remove_file(path).ok();
+        Ok(())
+    }
+}

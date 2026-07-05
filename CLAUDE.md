@@ -1,4 +1,3 @@
-# PickScribe — instructions for Claude
+# PickScribe Agent Notes
 
-The repository conventions live in [`AGENTS.md`](AGENTS.md) — read it first;
-everything there applies to you.
+Read [`AGENTS.md`](AGENTS.md) first; it is the source of repo conventions for all agents.

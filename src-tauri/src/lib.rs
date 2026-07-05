@@ -38,6 +38,36 @@ fn parse_chord_arg(args: &[String]) -> Option<String> {
         .map(str::to_string)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn parse_chord_arg_accepts_supported_paste_chords() {
+        assert_eq!(
+            parse_chord_arg(&args(&["pickscribe-app", "--paste-chord=ctrl-v"])).as_deref(),
+            Some("ctrl-v")
+        );
+        assert_eq!(
+            parse_chord_arg(&args(&["pickscribe-app", "--paste-chord=ctrl-shift-v"])).as_deref(),
+            Some("ctrl-shift-v")
+        );
+    }
+
+    #[test]
+    fn parse_chord_arg_rejects_missing_or_unsupported_chords() {
+        assert_eq!(parse_chord_arg(&args(&["pickscribe-app", "--toggle"])), None);
+        assert_eq!(
+            parse_chord_arg(&args(&["pickscribe-app", "--paste-chord=ctrl-alt-v"])),
+            None
+        );
+    }
+}
+
 #[tauri::command]
 fn cancel_dictation(app: AppHandle, engine: State<'_, Arc<Engine>>) {
     engine.cancel(&app);

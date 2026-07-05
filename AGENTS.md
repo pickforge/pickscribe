@@ -7,8 +7,18 @@ Repo-local guide for agents working in PickScribe — local dictation for Linux
 
 - `bun install` then `bun run tauri dev` to develop.
 - `bun run check` type-checks the Svelte frontend (`build` alone is just
-  `vite build`); `cargo test --workspace` covers the Rust side
-  (the root package and `src-tauri` are one workspace, matching CI). Run both before calling work done.
+  `vite build`); `bun run test` runs frontend unit tests; `bun run
+  test:coverage` enforces the frontend coverage ratchet; `cargo test
+  --workspace --locked --all-targets` covers the Rust side (the root package
+  and `src-tauri` are one workspace, matching CI). Run these before calling
+  work done.
+- Default to tests with behavior changes: add a failing regression test for bugs
+  when practical, characterize existing behavior before risky refactors, and
+  keep tests in the same PR as the code they cover.
+- Coverage gates are ratchets, not aspirations. Do not lower thresholds without
+  maintainer approval.
+- Durable business/domain behavior belongs in existing core/lib layers instead
+  of UI components; keep it simple, without DDD ceremony.
 
 ## Invariants
 
