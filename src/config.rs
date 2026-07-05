@@ -169,11 +169,17 @@ impl AppConfig {
     /// process env > ~/.config/pickscribe/env > config.toml.
     pub fn resolve_api_key(&self, provider: &str) -> Option<String> {
         let env_file = read_env_file();
+        self.resolve_api_key_from_sources(provider, &env_file, lookup_env)
+    }
+
+    fn resolve_api_key_from_sources(
+        &self,
+        provider: &str,
+        env_file: &HashMap<String, String>,
+        process_env: impl Fn(&str) -> Option<String>,
+    ) -> Option<String> {
         let lookup = |name: &str| -> Option<String> {
-            std::env::var(name)
-                .ok()
-                .filter(|v| !v.is_empty())
-                .or_else(|| env_file.get(name).cloned())
+            process_env(name).or_else(|| env_file.get(name).cloned())
         };
         let key = match provider {
             "deepseek" => lookup("DEEPSEEK_API_KEY").or_else(|| lookup("PICKSCRIBE_API_KEY")),
@@ -220,11 +226,15 @@ impl AppConfig {
 /// Parse `export KEY="value"` / `KEY=value` lines from ~/.config/pickscribe/env
 /// (the file sourced by the CLI wrappers) so the GUI shares credentials.
 pub fn read_env_file() -> HashMap<String, String> {
-    let mut map = HashMap::new();
     let path = config_dir().join("env");
     let Ok(raw) = fs::read_to_string(path) else {
-        return map;
+        return HashMap::new();
     };
+    parse_env_file(&raw)
+}
+
+fn parse_env_file(raw: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
     for line in raw.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -249,75 +259,18 @@ pub fn read_env_file() -> HashMap<String, String> {
     map
 }
 
+fn lookup_env(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        env,
-        ffi::{OsStr, OsString},
-        fs,
-        path::PathBuf,
-        sync::{Mutex, MutexGuard, OnceLock},
-        time::{SystemTime, UNIX_EPOCH},
-    };
-
-    fn env_guard() -> MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
-    }
-
-    struct EnvSnapshot {
-        values: Vec<(&'static str, Option<OsString>)>,
-    }
-
-    impl EnvSnapshot {
-        fn capture(keys: &[&'static str]) -> Self {
-            Self {
-                values: keys.iter().map(|key| (*key, env::var_os(key))).collect(),
-            }
-        }
-    }
-
-    impl Drop for EnvSnapshot {
-        fn drop(&mut self) {
-            for (key, value) in &self.values {
-                match value {
-                    Some(value) => set_env(key, value),
-                    None => remove_env(key),
-                }
-            }
-        }
-    }
-
-    fn set_env(key: &str, value: impl AsRef<OsStr>) {
-        unsafe { env::set_var(key, value) };
-    }
-
-    fn remove_env(key: &str) {
-        unsafe { env::remove_var(key) };
-    }
-
-    fn temp_root(name: &str) -> PathBuf {
-        let id = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = env::temp_dir().join(format!("pickscribe-{name}-{id}"));
-        fs::create_dir_all(&root).unwrap();
-        root
-    }
+    use std::collections::HashMap;
 
     #[test]
     fn read_env_file_parses_supported_shell_assignments() {
-        let _guard = env_guard();
-        let _snapshot = EnvSnapshot::capture(&["XDG_CONFIG_HOME"]);
-        let root = temp_root("env-parse");
-        set_env("XDG_CONFIG_HOME", root.as_os_str());
-
-        let dir = root.join("pickscribe");
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(
-            dir.join("env"),
+        let env_file = parse_env_file(
             r#"
                 # ignored
                 export DEEPSEEK_API_KEY="deepseek file"
@@ -327,10 +280,7 @@ mod tests {
                 MISSING
                 EMPTY_KEY=
             "#,
-        )
-        .unwrap();
-
-        let env_file = read_env_file();
+        );
 
         assert_eq!(
             env_file.get("DEEPSEEK_API_KEY").map(String::as_str),
@@ -347,57 +297,40 @@ mod tests {
         assert_eq!(env_file.get("EMPTY_KEY").map(String::as_str), Some(""));
         assert!(!env_file.contains_key("BAD-KEY"));
         assert!(!env_file.contains_key("MISSING"));
-
-        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn resolve_api_key_prefers_process_env_then_env_file_then_config() {
-        let _guard = env_guard();
-        let _snapshot = EnvSnapshot::capture(&[
-            "XDG_CONFIG_HOME",
-            "DEEPSEEK_API_KEY",
-            "OPENAI_API_KEY",
-            "PICKSCRIBE_API_KEY",
+        let env_file = HashMap::from([
+            ("DEEPSEEK_API_KEY".to_string(), "file-deepseek".to_string()),
+            ("PICKSCRIBE_API_KEY".to_string(), "file-generic".to_string()),
         ]);
-        let root = temp_root("api-key");
-        set_env("XDG_CONFIG_HOME", root.as_os_str());
-        remove_env("OPENAI_API_KEY");
-        remove_env("PICKSCRIBE_API_KEY");
-
-        let dir = root.join("pickscribe");
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(
-            dir.join("env"),
-            "DEEPSEEK_API_KEY=file-deepseek\nPICKSCRIBE_API_KEY=file-generic\n",
-        )
-        .unwrap();
-
         let mut cfg = AppConfig::default();
         cfg.cleanup.api_key = "config-key".into();
 
-        set_env("DEEPSEEK_API_KEY", "process-deepseek");
         assert_eq!(
-            cfg.resolve_api_key("deepseek").as_deref(),
+            cfg.resolve_api_key_from_sources("deepseek", &env_file, |key| {
+                (key == "DEEPSEEK_API_KEY").then(|| "process-deepseek".to_string())
+            })
+            .as_deref(),
             Some("process-deepseek")
         );
 
-        remove_env("DEEPSEEK_API_KEY");
         assert_eq!(
-            cfg.resolve_api_key("deepseek").as_deref(),
+            cfg.resolve_api_key_from_sources("deepseek", &env_file, |_| None)
+                .as_deref(),
             Some("file-deepseek")
         );
         assert_eq!(
-            cfg.resolve_api_key("openai").as_deref(),
+            cfg.resolve_api_key_from_sources("openai", &env_file, |_| None)
+                .as_deref(),
             Some("file-generic")
         );
 
-        fs::remove_file(dir.join("env")).unwrap();
         assert_eq!(
-            cfg.resolve_api_key("openai").as_deref(),
+            cfg.resolve_api_key_from_sources("openai", &HashMap::new(), |_| None)
+                .as_deref(),
             Some("config-key")
         );
-
-        fs::remove_dir_all(root).unwrap();
     }
 }
