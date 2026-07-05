@@ -59,6 +59,14 @@ On Wayland the app runs natively (smooth WebKitGTK scrolling). The floating butt
 
 ## Install
 
+**Quick install** (desktop app, Linux AppImage, no sudo):
+
+```sh
+curl -fsSL https://pickforge.dev/pickscribe/install.sh | sh
+```
+
+Installs the latest [release](https://github.com/pickforge/pickscribe/releases) AppImage into your home. The dictation engine (whisper.cpp, ydotool paste automation) is set up by building from source below.
+
 Install system dependencies on Arch/CachyOS:
 
 ```bash
