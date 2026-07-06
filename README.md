@@ -18,7 +18,7 @@ Local-first. Open source. Built for people who ship.
 
 PickForge builds the app. PickScribe lets you dictate into it — or any other app — instead of typing.
 
-> **Status:** working Rust MVP for CachyOS/Arch + KDE/Wayland, now with a Tauri desktop app (tray, floating waveform button, history, metrics, settings UI). Native audio capture and packaging are planned in [`FULL_APP_PLAN.md`](FULL_APP_PLAN.md).
+> **Status:** Linux ships first: CachyOS/Arch + KDE/Wayland are the primary target, with `.deb` and AppImage bundles. macOS and Windows remain blocked until native audio capture, paste automation, global shortcuts, tray/window validation, signing, and native-host smoke tests land.
 
 ## The desktop app
 
@@ -67,7 +67,7 @@ curl -fsSL https://pickforge.dev/pickscribe/install.sh | sh
 
 Installs the latest [release](https://github.com/pickforge/pickscribe/releases) AppImage into your home. The dictation engine (whisper.cpp, ydotool paste automation) is set up by building from source below.
 
-Download the latest `.deb` or `.AppImage` from [Releases](https://github.com/pickforge/pickscribe/releases/latest). PickScribe ships Linux only: install the `.deb` with your package manager, or `chmod +x` the `.AppImage` and run it. Updates arrive through the in-app updater.
+Download the latest `.deb` or `.AppImage` from [Releases](https://github.com/pickforge/pickscribe/releases/latest). PickScribe ships Linux only for now: install the `.deb` with your package manager, or `chmod +x` the `.AppImage` and run it. Updates arrive through the in-app updater.
 
 ### From source
 

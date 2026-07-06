@@ -6,6 +6,7 @@ use std::time::Duration;
 use pickscribe::config::AppConfig;
 use pickscribe::engine::{cleanup, levels::LevelMeter, paste, recorder, sounds, stt};
 use pickscribe::history::{HistoryDb, HistoryEntry, NewEntry};
+use pickscribe::platform;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -97,6 +98,20 @@ impl Engine {
     }
 
     pub fn start(self: &Arc<Self>, app: &AppHandle) {
+        let support = platform::current();
+        if let Some(message) = support.unsupported_dictation_message() {
+            if AppConfig::load().general.sounds {
+                sounds::play(sounds::Cue::Error);
+            }
+            self.set_state(app, |s| {
+                s.stage = Stage::Idle;
+                s.recording_started_ms = None;
+                s.error = Some(message);
+                s.message = None;
+            });
+            return;
+        }
+
         let cfg = AppConfig::load();
         let recording = match recorder::start(&cfg.stt) {
             Ok(rec) => rec,

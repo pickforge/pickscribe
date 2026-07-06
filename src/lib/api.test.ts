@@ -1,10 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { desktopApiAvailable, formatDuration, formatError, formatMinutes } from "./api";
 
 describe("desktopApiAvailable", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("is false outside the Tauri webview", () => {
     expect(desktopApiAvailable()).toBe(false);
+  });
+
+  it("is true when Tauri internals are present", () => {
+    vi.stubGlobal("window", { __TAURI_INTERNALS__: {} });
+
+    expect(desktopApiAvailable()).toBe(true);
   });
 });
 

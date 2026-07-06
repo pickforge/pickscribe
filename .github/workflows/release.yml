@@ -113,8 +113,10 @@ jobs:
           ## Platform support
 
           PickScribe is Linux-first (PipeWire + whisper.cpp + ydotool). The
-          bundles below are built and smoke-checked on Ubuntu; Arch/CachyOS
-          users can also build from source with `bun run tauri build`.
+          bundles below are built on Ubuntu; Arch/CachyOS users can also build
+          from source with `bun run tauri build`. Native-host smoke checks are
+          not automated yet. macOS and Windows remain blocked until their native
+          audio, paste, shortcut, tray/window, signing, and smoke-test work lands.
           EOF
           )"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then

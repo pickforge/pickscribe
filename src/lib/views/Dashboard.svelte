@@ -9,6 +9,7 @@
     formatMinutes,
     formatError,
     type Metrics,
+    type PlatformSupport,
     type StatePayload,
   } from "../api";
   import Waveform from "../components/Waveform.svelte";
@@ -22,11 +23,13 @@
   let metrics = $state<Metrics | null>(null);
   let metricsError = $state<string | null>(null);
   let localOnly = $state(false);
+  let platformSupport = $state<PlatformSupport | null>(null);
   let nowMs = $state(Date.now());
 
   $effect(() => {
     if (!desktopApiAvailable()) return;
     api.getAppConfig().then((c) => (localOnly = c.general.local_only)).catch(() => {});
+    api.getPlatformSupport().then((support) => (platformSupport = support)).catch(() => {});
   });
 
   $effect(() => {
@@ -59,6 +62,10 @@
       dictation.stage === "pasting"
   );
 
+  const platformBlocked = $derived(
+    platformSupport !== null && !platformSupport.dictation_supported
+  );
+
   const stageLabel = $derived(
     {
       idle: "Ready",
@@ -88,6 +95,7 @@
   const chartMax = $derived(Math.max(1, ...chartDays.map((d) => d.words)));
 
   function toggle() {
+    if (platformBlocked) return;
     api.toggleDictation().catch(() => {});
   }
 
@@ -101,7 +109,7 @@
     <div>
       <p class="eyebrow ember">§ 01 · Dictation</p>
       <h2>
-        {#if dictation.stage === "idle"}Press the orb or your hotkey{:else}{stageLabel}…{/if}
+        {#if platformBlocked}Linux release target only{:else if dictation.stage === "idle"}Press the orb or your hotkey{:else}{stageLabel}…{/if}
       </h2>
     </div>
     <div class="head-pills">
@@ -122,8 +130,8 @@
       class:recording={dictation.stage === "recording"}
       class:busy
       onclick={toggle}
-      disabled={busy}
-      aria-label={dictation.stage === "recording" ? "Stop recording" : "Start recording"}
+      disabled={busy || platformBlocked}
+      aria-label={platformBlocked ? "Dictation is unavailable on this platform" : dictation.stage === "recording" ? "Stop recording" : "Start recording"}
     >
       {#if dictation.stage === "recording"}
         <Stop size={36} weight="fill" />
@@ -150,6 +158,8 @@
           <span class="error-line" title={dictation.error}>{dictation.error}</span>
         {:else if dictation.message}
           <span class="muted-line">{dictation.message}</span>
+        {:else if platformBlocked && platformSupport}
+          <span class="error-line" title={platformSupport.summary}>{platformSupport.summary}</span>
         {:else if localOnly}
           <span class="muted-line">Local-only mode — nothing leaves this machine.</span>
         {:else}

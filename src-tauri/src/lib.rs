@@ -7,6 +7,7 @@ use std::sync::Arc;
 use pickscribe::config::AppConfig;
 use pickscribe::engine::{command_exists, stt};
 use pickscribe::history::{HistoryEntry, Metrics};
+use pickscribe::platform::{self, PlatformSupport};
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_autostart::MacosLauncher;
@@ -78,6 +79,11 @@ fn get_app_config() -> AppConfig {
     AppConfig::load()
 }
 
+#[tauri::command]
+fn get_platform_support() -> PlatformSupport {
+    platform::current()
+}
+
 pub(crate) const EVENT_CONFIG: &str = "pickscribe://config";
 
 #[tauri::command]
@@ -140,6 +146,7 @@ struct DoctorCheck {
 #[tauri::command]
 fn run_doctor() -> Vec<DoctorCheck> {
     let cfg = AppConfig::load();
+    let support = platform::current();
     let mut checks = Vec::new();
     let mut push = |name: &str, ok: bool, detail: String| {
         checks.push(DoctorCheck {
@@ -148,6 +155,18 @@ fn run_doctor() -> Vec<DoctorCheck> {
             detail,
         });
     };
+
+    push(
+        "Release platform",
+        support.dictation_supported,
+        support.summary.clone(),
+    );
+    for blocker in &support.blockers {
+        push(&blocker.name, false, blocker.detail.clone());
+    }
+    if !support.dictation_supported {
+        return checks;
+    }
 
     push(
         "Audio recorder",
@@ -492,6 +511,7 @@ pub fn run() {
             cancel_dictation,
             get_app_config,
             update_app_config,
+            get_platform_support,
             list_history,
             delete_history_entry,
             clear_history,

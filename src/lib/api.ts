@@ -72,6 +72,21 @@ export interface AppConfig {
   };
 }
 
+export type ReleaseStatus = "ships_now" | "blocked";
+
+export interface PlatformBlocker {
+  name: string;
+  detail: string;
+}
+
+export interface PlatformSupport {
+  os: string;
+  release_status: ReleaseStatus;
+  dictation_supported: boolean;
+  summary: string;
+  blockers: PlatformBlocker[];
+}
+
 export interface DoctorCheck {
   name: string;
   ok: boolean;
@@ -90,6 +105,7 @@ export const api = {
   toggleDictation: () => invoke<void>("toggle_dictation"),
   cancelDictation: () => invoke<void>("cancel_dictation"),
   getAppConfig: () => invoke<AppConfig>("get_app_config"),
+  getPlatformSupport: () => invoke<PlatformSupport>("get_platform_support"),
   updateAppConfig: (config: AppConfig) => invoke<AppConfig>("update_app_config", { config }),
   listHistory: (search = "", limit = 100, offset = 0) =>
     invoke<HistoryEntry[]>("list_history", { search, limit, offset }),
