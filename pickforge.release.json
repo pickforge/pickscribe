@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "repository": "pickforge/pickscribe",
+  "appName": "PickScribe",
+  "tauriConfig": "src-tauri/tauri.conf.json",
+  "collect": {
+    "artifactRoot": "target/release/bundle",
+    "outputDir": "release-assets",
+    "patterns": [
+      "*.AppImage",
+      "*.AppImage.sig",
+      "*.AppImage.tar.gz",
+      "*.AppImage.tar.gz.sig",
+      "*.deb",
+      "*.deb.sig"
+    ]
+  },
+  "stable": {
+    "tagPrefix": "v",
+    "latestJsonAsset": "latest.json"
+  },
+  "updater": {
+    "requiredPlatforms": ["linux-x86_64"]
+  }
+}
