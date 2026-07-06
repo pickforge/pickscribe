@@ -1,93 +1,16 @@
-/* PickScribe design system — Pickforge Studio "one ember on a cold canvas".
-   Dark is canonical; light mode follows branding-visual/DARK-LIGHT-MODE.md. */
-
-:root {
-  --ember: #ff7a1a;
-  --ember-soft: #ff9a4a;
-  --ember-deep: #cc5e0c;
-  --surface: #0a0a0b;
-  --surface-1: #0f0f11;
-  --surface-2: #141417;
-  --text: #f2f2f3;
-  --muted: #6e6e75;
-  --hairline: rgba(255, 255, 255, 0.08);
-  --hairline-strong: rgba(255, 255, 255, 0.14);
-  --ok: #34d399;
-  --warn: #fbbf24;
-  --bad: #fb7185;
-
-  /* Recurring alpha surfaces, themed as a set. */
-  --wash: rgba(255, 255, 255, 0.04);
-  --wash-strong: rgba(255, 255, 255, 0.07);
-  --well: rgba(0, 0, 0, 0.2);
-  --well-border: rgba(255, 255, 255, 0.05);
-  --border-input: rgba(255, 255, 255, 0.1);
-  --pill-border: rgba(255, 255, 255, 0.15);
-  --pill-bg: rgba(255, 255, 255, 0.05);
-  --glass-bg: rgba(15, 15, 17, 0.7);
-  --capsule-bg: rgba(15, 15, 17, 0.88);
-  --scroll-thumb: rgba(255, 255, 255, 0.12);
-
-  --font-sans: "Geist Sans", "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "Geist Mono", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
-
-  --radius-card: 14px;
-  --radius-pill: 999px;
-  --ease-forge: cubic-bezier(0.16, 1, 0.3, 1);
-  --glow-ember: 0 0 60px -10px rgba(255, 122, 26, 0.45);
-  --glow-ember-soft: 0 0 30px -8px rgba(255, 122, 26, 0.25);
-  --glow-ember-strong: 0 0 90px -10px rgba(255, 122, 26, 0.65);
-}
-
-/* Token inversion map — branding-visual/DARK-LIGHT-MODE.md §3. */
-:root[data-theme="light"] {
-  --ember: #e5610a;
-  --ember-soft: #f58220;
-  --ember-deep: #b14c00;
-  --surface: #fafaf7;
-  --surface-1: #ffffff;
-  --surface-2: #f2f2ee;
-  --text: #17171a;
-  /* --muted stays #6e6e75 in both modes. */
-  --hairline: rgba(23, 23, 26, 0.08);
-  --hairline-strong: rgba(23, 23, 26, 0.14);
-
-  --wash: rgba(23, 23, 26, 0.04);
-  --wash-strong: rgba(23, 23, 26, 0.08);
-  --well: rgba(23, 23, 26, 0.05);
-  --well-border: rgba(23, 23, 26, 0.06);
-  --border-input: rgba(23, 23, 26, 0.12);
-  --pill-border: rgba(23, 23, 26, 0.16);
-  --pill-bg: rgba(23, 23, 26, 0.04);
-  --glass-bg: rgba(255, 255, 255, 0.7);
-  --capsule-bg: rgba(255, 255, 255, 0.9);
-  --scroll-thumb: rgba(23, 23, 26, 0.18);
-
-  /* The light canvas reflects more — the halo must be subtler. */
-  --glow-ember: 0 0 60px -10px rgba(229, 97, 10, 0.35);
-  --glow-ember-soft: 0 0 30px -8px rgba(229, 97, 10, 0.18);
-  --glow-ember-strong: 0 0 90px -10px rgba(229, 97, 10, 0.5);
-}
-
-* {
-  box-sizing: border-box;
-}
+@import "@pickforge/brand/compat-unprefixed.css";
 
 html,
 body {
-  margin: 0;
-  padding: 0;
   height: 100%;
 }
 
 body {
   background: var(--surface);
   color: var(--text);
-  font-family: var(--font-sans);
   font-size: 15px;
   letter-spacing: -0.01em;
   line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
   overflow: hidden;
   transition: background 300ms var(--ease-forge), color 300ms var(--ease-forge);
 }
@@ -107,22 +30,6 @@ body.float-host {
   height: 100%;
 }
 
-::selection {
-  background: color-mix(in srgb, var(--ember) 35%, transparent);
-}
-
-*::-webkit-scrollbar {
-  width: 10px;
-}
-*::-webkit-scrollbar-thumb {
-  background: var(--scroll-thumb);
-  border: 3px solid var(--surface);
-  border-radius: 999px;
-}
-*::-webkit-scrollbar-track {
-  background: transparent;
-}
-
 h1,
 h2,
 h3 {
@@ -133,10 +40,6 @@ h3 {
 
 p {
   margin: 0;
-}
-
-button {
-  font-family: inherit;
 }
 
 /* ---------- primitives ---------- */
