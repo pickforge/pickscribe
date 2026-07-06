@@ -24,6 +24,35 @@ Current components:
 - DeepSeek official API cleanup using `deepseek-v4-flash` by default.
 - Safe weekly whisper.cpp update checks via `PICKSCRIBE_AUTO_UPDATE_WHISPER="check"`.
 
+## Cross-platform release plan
+
+PickScribe can ship on Linux today. macOS and Windows are not honest release
+targets yet because the core dictation path still depends on Linux desktop
+tools: `pw-record`, `wl-copy`/`xclip`/`xsel`, `ydotool`/`xdotool`, KWin rules,
+and KDE shortcut setup.
+
+Current release state:
+
+| Platform | Status | Blocking work |
+| --- | --- | --- |
+| Linux | Ships now | Keep building signed `.deb` and AppImage artifacts from CI. |
+| macOS | Blocked | Native microphone capture, clipboard/paste automation, global shortcut registration, tray/window validation, Developer ID signing, notarization, and native host smoke tests. |
+| Windows | Blocked | Native microphone capture, clipboard/paste automation, global shortcut registration, tray/window validation, installer/code-signing setup, and native host smoke tests. |
+
+Follow-up PR order:
+
+1. Replace the Linux-only recorder path with a native audio abstraction and
+   keep the current `pw-record` backend as Linux fallback.
+2. Replace Linux-only clipboard/paste helpers with platform backends: existing
+   `ydotool`/`xdotool` on Linux, accessibility-driven paste on macOS, and
+   `SendInput`/clipboard paste on Windows.
+3. Add in-app global shortcut registration with Tauri permissions while keeping
+   `pickscribe-app --toggle` for external desktop shortcuts.
+4. Add macOS bundle metadata, microphone usage text, signing/notarization
+   secrets, Intel/Apple Silicon CI builds, and native smoke checks.
+5. Add Windows NSIS/MSI release jobs, code-signing secrets, updater manifest
+   entries, and native smoke checks.
+
 ## Recommended shortcut
 
 Best default:

@@ -299,6 +299,7 @@ voice-cleanup
 Canonical PickScribe brand assets live in `assets/branding/`. The set follows the Pickforge Studio v2 system: dark canvas, off-white bracket mark, waveform motif, and ember accent.
 
 - `pickscribe-app-icon.svg` and `pickscribe-app-icon-{32,64,128,256,512,1024}.png` for package/app icons.
+- `src-tauri/icons/icon.icns`, `src-tauri/icons/icon.ico`, and the generated PNG/AppX exports for Tauri bundle icons.
 - `pickscribe-tray-idle.svg`, `pickscribe-tray-recording.svg`, and PNG exports for future tray states.
 - `pickscribe-lockup-horizontal.svg`, `pickscribe-wordmark.svg`, `pickscribe-og-image.png`, and `pickscribe-hero-art.png` for docs, social cards, and marketing surfaces.
 
@@ -316,6 +317,7 @@ Canonical PickScribe brand assets live in `assets/branding/`. The set follows th
 See [`FULL_APP_PLAN.md`](FULL_APP_PLAN.md) for the full product plan, including:
 
 - dependency doctor command;
+- cross-platform release blockers and follow-up PRs;
 - config file migration;
 - model presets;
 - Caps Lock/F13 setup helper;
