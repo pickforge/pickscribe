@@ -39,6 +39,9 @@ Current release state:
 | macOS | Blocked | Native microphone capture, clipboard/paste automation, global shortcut registration, tray/window validation, Developer ID signing, notarization, and native host smoke tests. |
 | Windows | Blocked | Native microphone capture, clipboard/paste automation, global shortcut registration, tray/window validation, installer/code-signing setup, and native host smoke tests. |
 
+Native-host smoke tests are intentionally deferred for the current release work;
+macOS and Windows stay blocked until those checks can run on real hosts.
+
 Follow-up PR order:
 
 1. Replace the Linux-only recorder path with a native audio abstraction and

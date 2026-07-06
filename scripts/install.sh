@@ -84,7 +84,7 @@ detect_platform() {
     Linux)
       ;;
     *)
-      die "PickScribe is Linux-only (PipeWire + whisper.cpp + ydotool). Build from source: https://github.com/pickforge/pickscribe"
+      die "PickScribe currently ships Linux only. macOS/Windows releases are blocked until native audio, paste, shortcut, window, signing, and smoke-test support lands."
       ;;
   esac
 
