@@ -50,13 +50,14 @@ fn read_sample_window(source: &Path, start_ms: u64, end_ms: u64) -> Result<(Vec<
     let mut header = [0u8; WAV_HEADER_BYTES as usize];
     file.read_exact(&mut header)
         .with_context(|| format!("reading WAV header from {}", source.display()))?;
-    validate_header(&header)?;
+    let header_data_bytes = validate_header(&header)?;
 
-    let total_bytes = file
+    let file_data_bytes = file
         .metadata()
         .with_context(|| format!("stating {}", source.display()))?
         .len()
         .saturating_sub(WAV_HEADER_BYTES);
+    let total_bytes = audio_data_bytes(&mut file, header_data_bytes, file_data_bytes)?;
     let available_samples = total_bytes / BYTES_PER_SAMPLE;
     let start_sample = ms_to_sample(start_ms).min(available_samples);
     let end_sample = ms_to_sample(end_ms).min(available_samples);
@@ -91,8 +92,8 @@ pub fn write_wav(destination: &Path, samples: &[i16]) -> Result<()> {
             .context("WAV segment is too large")?,
     )
     .context("WAV segment is too large")?;
-    let mut file = File::create(destination)
-        .with_context(|| format!("creating {}", destination.display()))?;
+    let mut file =
+        File::create(destination).with_context(|| format!("creating {}", destination.display()))?;
     write_header(&mut file, data_len)?;
     for sample in samples {
         file.write_all(&sample.to_le_bytes())?;
@@ -118,7 +119,9 @@ pub fn find_low_energy_boundary(samples: &[i16], target: usize, radius: usize) -
         for sample in &samples[window_start..=window_end] {
             energy += sample.unsigned_abs() as u64;
         }
-        if energy < best_energy {
+        let is_better_tie =
+            energy == best_energy && index.abs_diff(target) < best_index.abs_diff(target);
+        if energy < best_energy || is_better_tie {
             best_energy = energy;
             best_index = index;
         }
@@ -143,7 +146,7 @@ pub fn energy(samples: &[i16]) -> (f32, f32) {
     (peak, rms.min(1.0))
 }
 
-fn validate_header(header: &[u8; WAV_HEADER_BYTES as usize]) -> Result<()> {
+fn validate_header(header: &[u8; WAV_HEADER_BYTES as usize]) -> Result<u64> {
     if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" || &header[12..16] != b"fmt " {
         bail!("unsupported WAV header");
     }
@@ -159,7 +162,46 @@ fn validate_header(header: &[u8; WAV_HEADER_BYTES as usize]) -> Result<()> {
     {
         bail!("expected 16 kHz mono 16-bit PCM WAV");
     }
-    Ok(())
+    Ok(u32::from_le_bytes([header[40], header[41], header[42], header[43]]) as u64)
+}
+
+fn audio_data_bytes(file: &mut File, header_data_bytes: u64, file_data_bytes: u64) -> Result<u64> {
+    if header_data_bytes == 0 || header_data_bytes > file_data_bytes {
+        return Ok(file_data_bytes);
+    }
+    if header_data_bytes < file_data_bytes
+        && !has_known_trailing_chunk(file, header_data_bytes, file_data_bytes - header_data_bytes)?
+    {
+        return Ok(file_data_bytes);
+    }
+    Ok(header_data_bytes)
+}
+
+fn has_known_trailing_chunk(file: &mut File, offset: u64, remaining: u64) -> Result<bool> {
+    if remaining < 8 {
+        return Ok(false);
+    }
+
+    file.seek(SeekFrom::Start(WAV_HEADER_BYTES + offset))?;
+    let mut chunk_header = [0u8; 8];
+    file.read_exact(&mut chunk_header)?;
+    let chunk_id = &chunk_header[0..4];
+    let chunk_len = u32::from_le_bytes([
+        chunk_header[4],
+        chunk_header[5],
+        chunk_header[6],
+        chunk_header[7],
+    ]) as u64;
+    let padded_len = 8 + chunk_len + (chunk_len % 2);
+
+    Ok(is_known_trailing_chunk(chunk_id) && padded_len <= remaining)
+}
+
+fn is_known_trailing_chunk(chunk_id: &[u8]) -> bool {
+    matches!(
+        chunk_id,
+        b"LIST" | b"JUNK" | b"bext" | b"fact" | b"cue " | b"smpl" | b"iXML" | b"ID3 "
+    )
 }
 
 fn write_header(writer: &mut impl Write, data_len: u32) -> Result<()> {
@@ -247,6 +289,35 @@ mod tests {
     }
 
     #[test]
+    fn read_samples_ignores_trailing_non_audio_chunks() -> Result<()> {
+        let dir = temp_dir("wav-trailing-chunk");
+        let source = dir.join("source.wav");
+        write_wav(&source, &[7; 1_600])?;
+        let mut file = fs::OpenOptions::new().append(true).open(&source)?;
+        file.write_all(b"LIST")?;
+        file.write_all(&4u32.to_le_bytes())?;
+        file.write_all(b"INFO")?;
+
+        assert_eq!(read_samples(&source, 0, 1_000)?.len(), 1_600);
+        fs::remove_dir_all(dir).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn read_samples_uses_file_length_for_stale_growing_header() -> Result<()> {
+        let dir = temp_dir("wav-stale-header");
+        let source = dir.join("source.wav");
+        write_wav(&source, &[1; 1_600])?;
+        let mut file = fs::OpenOptions::new().write(true).open(&source)?;
+        file.seek(SeekFrom::Start(40))?;
+        file.write_all(&1_600u32.to_le_bytes())?;
+
+        assert_eq!(read_samples(&source, 0, 1_000)?.len(), 1_600);
+        fs::remove_dir_all(dir).ok();
+        Ok(())
+    }
+
+    #[test]
     fn low_energy_boundary_prefers_nearby_silence() {
         let mut samples = vec![12_000; 2_000];
         for sample in &mut samples[900..1_100] {
@@ -256,6 +327,13 @@ mod tests {
         let boundary = find_low_energy_boundary(&samples, 850, 300);
 
         assert!((900..=1_100).contains(&boundary), "boundary={boundary}");
+    }
+
+    #[test]
+    fn low_energy_boundary_keeps_ties_near_target() {
+        let samples = vec![0; 2_000];
+
+        assert_eq!(find_low_energy_boundary(&samples, 1_000, 300), 1_000);
     }
 
     #[test]
