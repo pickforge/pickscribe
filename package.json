@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test": "vitest run",
+    "test:installer": "node tests/install-script-smoke.mjs",
+    "test": "node tests/install-script-smoke.mjs && vitest run",
     "test:coverage": "vitest run --coverage",
     "tauri": "tauri"
   },
