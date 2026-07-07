@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
@@ -53,7 +53,6 @@ struct ActiveRecording {
 struct ActiveIncremental {
     worker_cancel_token: CancelToken,
     stop_requested: Arc<AtomicBool>,
-    final_duration_ms: Arc<AtomicU64>,
     done_rx: mpsc::Receiver<IncrementalDone>,
     temp_dir: PathBuf,
 }
@@ -80,7 +79,6 @@ struct IncrementalWorker {
     session_token: CancelToken,
     worker_cancel_token: CancelToken,
     stop_requested: Arc<AtomicBool>,
-    final_duration_ms: Arc<AtomicU64>,
 }
 
 #[derive(Clone)]
@@ -386,10 +384,17 @@ impl Engine {
             let _ = incremental::cleanup_session_dir(session, cfg.general.keep_audio);
         }
         if let Some(active) = active {
-            active.cancel_token.cancel();
-            if let Some(incremental) = active.incremental {
+            let ActiveRecording {
+                cancel_token,
+                recording,
+                incremental,
+                ..
+            } = active;
+            cancel_token.cancel();
+            if let Some(incremental) = incremental {
                 incremental.worker_cancel_token.cancel();
                 incremental.stop_requested.store(true, Ordering::SeqCst);
+                recording.cancel();
                 if incremental
                     .done_rx
                     .recv_timeout(Duration::from_secs(2))
@@ -400,8 +405,9 @@ impl Engine {
                         cfg.general.keep_audio,
                     );
                 }
+            } else {
+                recording.cancel();
             }
-            active.recording.cancel();
         }
         self.set_state(app, |s| {
             s.stage = Stage::Idle;
@@ -425,7 +431,6 @@ impl Engine {
 
         let worker_cancel_token = CancelToken::new();
         let stop_requested = Arc::new(AtomicBool::new(false));
-        let final_duration_ms = Arc::new(AtomicU64::new(0));
         let (done_tx, done_rx) = mpsc::channel();
         let worker = IncrementalWorker {
             app: app.clone(),
@@ -437,13 +442,11 @@ impl Engine {
             session_token: cancel_token,
             worker_cancel_token: worker_cancel_token.clone(),
             stop_requested: Arc::clone(&stop_requested),
-            final_duration_ms: Arc::clone(&final_duration_ms),
         };
 
         let active = ActiveIncremental {
             worker_cancel_token,
             stop_requested,
-            final_duration_ms,
             done_rx,
             temp_dir,
         };
@@ -458,15 +461,11 @@ impl Engine {
     fn incremental_raw_text(
         &self,
         cfg: &AppConfig,
-        duration_ms: u64,
         active: Option<ActiveIncremental>,
         session_id: &str,
         token: &CancelToken,
     ) -> Option<String> {
         let active = active?;
-        active
-            .final_duration_ms
-            .store(duration_ms, Ordering::SeqCst);
         active.stop_requested.store(true, Ordering::SeqCst);
 
         for _ in 0..50 {
@@ -526,13 +525,7 @@ impl Engine {
             return;
         }
 
-        let raw = match self.incremental_raw_text(
-            &cfg,
-            duration_ms,
-            incremental,
-            &session_id,
-            &cancel_token,
-        ) {
+        let raw = match self.incremental_raw_text(&cfg, incremental, &session_id, &cancel_token) {
             Some(text) => Ok(text),
             None => {
                 if !self.is_session_current(&session_id, &cancel_token) {
@@ -661,7 +654,7 @@ fn run_incremental_worker(worker: IncrementalWorker) -> IncrementalDone {
             .is_session_current(&worker.session_id, &worker.session_token)
     {
         let final_requested = worker.stop_requested.load(Ordering::SeqCst);
-        let available_ms = available_audio_ms(&worker.audio_path, final_requested, &worker);
+        let available_ms = growing_audio_duration_ms(&worker.audio_path).unwrap_or(0);
         if available_ms <= next_start_ms.saturating_add(250) {
             if final_requested {
                 if available_ms > next_start_ms {
@@ -685,6 +678,7 @@ fn run_incremental_worker(worker: IncrementalWorker) -> IncrementalDone {
         }
         if final_requested && buffered_ms > max_ms {
             fallback_required = true;
+            break;
         }
 
         let desired_end_ms = if final_requested {
@@ -830,15 +824,6 @@ fn emit_incremental_session(worker: &IncrementalWorker, session: &RecordingSessi
             s.segments = session.segments.clone();
         },
     );
-}
-
-fn available_audio_ms(path: &Path, final_requested: bool, worker: &IncrementalWorker) -> u64 {
-    let file_ms = growing_audio_duration_ms(path).unwrap_or(0);
-    if final_requested {
-        file_ms.max(worker.final_duration_ms.load(Ordering::SeqCst))
-    } else {
-        file_ms
-    }
 }
 
 fn growing_audio_duration_ms(path: &Path) -> anyhow::Result<u64> {
