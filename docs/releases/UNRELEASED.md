@@ -21,6 +21,8 @@ then reset this file.
   start guard, dashboard state, and release docs.
 - Added installer smoke tests for AppImage desktop integration and symlink-safe
   upgrades.
+- Added the disabled incremental dictation core foundation: segment/session
+  assembly, WAV segment slicing, and mocked runner safeguards.
 
 ## Validation
 
@@ -41,6 +43,8 @@ then reset this file.
 
 ### Not tested yet
 
+- `cargo fmt --all --check` because `rustfmt` is not installed in this
+  environment and `rustup` is unavailable.
 - Updater flow.
 - Native-host smoke tests.
 

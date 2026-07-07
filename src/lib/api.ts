@@ -54,6 +54,14 @@ export interface AppConfig {
     audio_target: string;
     recorder: string;
   };
+  incremental: {
+    enabled: boolean;
+    cleanup_segments: boolean;
+    target_ms: number;
+    max_ms: number;
+    overlap_ms: number;
+    max_queue: number;
+  };
   cleanup: {
     provider: string;
     model: string;
