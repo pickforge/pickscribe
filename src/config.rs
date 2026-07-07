@@ -60,6 +60,30 @@ impl Default for SttConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+pub struct IncrementalConfig {
+    pub enabled: bool,
+    pub cleanup_segments: bool,
+    pub target_ms: u64,
+    pub max_ms: u64,
+    pub overlap_ms: u64,
+    pub max_queue: usize,
+}
+
+impl Default for IncrementalConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            cleanup_segments: false,
+            target_ms: 5_000,
+            max_ms: 10_000,
+            overlap_ms: 1_500,
+            max_queue: 2,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CleanupConfig {
     /// "auto", "deepseek", "openai", "ollama", "none"
     pub provider: String,
@@ -117,6 +141,7 @@ impl Default for PasteConfig {
 pub struct AppConfig {
     pub general: GeneralConfig,
     pub stt: SttConfig,
+    pub incremental: IncrementalConfig,
     pub cleanup: CleanupConfig,
     pub paste: PasteConfig,
 }
@@ -332,5 +357,34 @@ mod tests {
                 .as_deref(),
             Some("config-key")
         );
+    }
+
+    #[test]
+    fn incremental_config_defaults_to_safe_disabled_values() {
+        let cfg = AppConfig::default();
+
+        assert!(!cfg.incremental.enabled);
+        assert!(!cfg.incremental.cleanup_segments);
+        assert_eq!(cfg.incremental.target_ms, 5_000);
+        assert_eq!(cfg.incremental.max_ms, 10_000);
+        assert_eq!(cfg.incremental.overlap_ms, 1_500);
+        assert_eq!(cfg.incremental.max_queue, 2);
+    }
+
+    #[test]
+    fn incremental_config_deserializes_partial_toml() {
+        let cfg: AppConfig = toml::from_str(
+            r#"
+            [incremental]
+            enabled = true
+            target_ms = 3000
+            "#,
+        )
+        .unwrap();
+
+        assert!(cfg.incremental.enabled);
+        assert!(!cfg.incremental.cleanup_segments);
+        assert_eq!(cfg.incremental.target_ms, 3_000);
+        assert_eq!(cfg.incremental.max_ms, 10_000);
     }
 }
