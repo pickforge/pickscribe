@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus, Stdio};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
@@ -39,8 +40,7 @@ pub fn detect_model_path() -> Option<PathBuf> {
         }
     }
     let home = std::env::var("HOME").ok()?;
-    let model_dir = PathBuf::from(&home)
-        .join(".local/share/whisper.cpp/models");
+    let model_dir = PathBuf::from(&home).join(".local/share/whisper.cpp/models");
     for name in [
         "ggml-large-v3-turbo.bin",
         "ggml-large-v3-turbo-q5_0.bin",
@@ -95,6 +95,14 @@ pub fn available_models() -> Vec<PathBuf> {
 }
 
 pub fn transcribe(cfg: &SttConfig, audio: &Path) -> Result<String> {
+    transcribe_with_cancel(cfg, audio, || false)
+}
+
+pub fn transcribe_with_cancel(
+    cfg: &SttConfig,
+    audio: &Path,
+    is_cancelled: impl Fn() -> bool,
+) -> Result<String> {
     let setup = resolve_whisper(cfg)?;
     let prefix = audio.with_extension("transcript");
     let mut cmd = Command::new(&setup.program);
@@ -114,13 +122,33 @@ pub fn transcribe(cfg: &SttConfig, audio: &Path) -> Result<String> {
         cfg.language.as_str()
     };
     cmd.arg("--language").arg(language);
-    let output = cmd.output().context("running whisper-cli")?;
-    if !output.status.success() {
-        bail!(
-            "whisper-cli failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+    let stderr_path = prefix.with_extension("transcript.stderr.log");
+    let stderr_file = fs::File::create(&stderr_path)
+        .with_context(|| format!("creating transcript log {}", stderr_path.display()))?;
+    cmd.stdout(Stdio::null()).stderr(Stdio::from(stderr_file));
+    let mut child = cmd.spawn().context("running whisper-cli")?;
+    let status: ExitStatus;
+    loop {
+        if is_cancelled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = fs::remove_file(prefix.with_extension("transcript.txt"));
+            let _ = fs::remove_file(&stderr_path);
+            bail!("transcription cancelled");
+        }
+        if let Some(exit_status) = child.try_wait()? {
+            status = exit_status;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
+
+    if !status.success() {
+        let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+        let _ = fs::remove_file(&stderr_path);
+        bail!("whisper-cli failed: {}", stderr.trim());
+    }
+    let _ = fs::remove_file(&stderr_path);
     let txt_path = prefix.with_extension("transcript.txt");
     let raw = fs::read_to_string(&txt_path)
         .with_context(|| format!("reading transcript {}", txt_path.display()))?;

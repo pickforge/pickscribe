@@ -8,6 +8,8 @@
     formatDuration,
     formatMinutes,
     formatError,
+    segmentDisplayText,
+    segmentStatusLabel,
     type Metrics,
     type PlatformSupport,
     type StatePayload,
@@ -93,6 +95,7 @@
   });
 
   const chartMax = $derived(Math.max(1, ...chartDays.map((d) => d.words)));
+  const segments = $derived(dictation.segments ?? []);
 
   function toggle() {
     if (platformBlocked) return;
@@ -168,6 +171,39 @@
       </div>
     </div>
   </div>
+
+  {#if segments.length > 0}
+    <section class="segments card fade-up">
+      <div class="segment-head">
+        <p class="eyebrow">LIVE TRANSCRIPT</p>
+        <span class="pill">{segments.length} segments</span>
+      </div>
+      <div class="segment-list">
+        {#each segments as segment (segment.id)}
+          {@const text = segmentDisplayText(segment)}
+          <div class="segment-row" class:failed={segment.status === "failed"}>
+            <span
+              class="segment-status"
+              class:pending={segment.status === "transcribing" ||
+                segment.status === "provisional" ||
+                segment.status === "recording"}
+            >
+              {segmentStatusLabel(segment.status)}
+            </span>
+            <p class="segment-text" aria-live="polite">
+              {#if segment.status === "failed"}
+                {segment.error ?? "Segment failed"}
+              {:else if text}
+                {text}
+              {:else}
+                Listening...
+              {/if}
+            </p>
+          </div>
+        {/each}
+      </div>
+    </section>
+  {/if}
 
   {#if metricsError}
     <p class="error-line">{metricsError}</p>
@@ -371,6 +407,58 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .segments {
+    padding: 18px 20px;
+  }
+
+  .segment-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  .segment-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .segment-row {
+    display: grid;
+    grid-template-columns: 96px minmax(0, 1fr);
+    align-items: start;
+    gap: 12px;
+    padding: 10px 0;
+    border-top: 1px solid var(--hairline);
+  }
+  .segment-row:first-child {
+    border-top: 0;
+  }
+  .segment-row.failed .segment-text {
+    color: var(--bad);
+  }
+
+  .segment-status {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .segment-status.pending {
+    color: var(--ember);
+  }
+
+  .segment-text {
+    min-width: 0;
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: color-mix(in srgb, var(--text) 90%, transparent);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 
   .stats {
