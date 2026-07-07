@@ -11,9 +11,9 @@ use serde::{Deserialize, Serialize};
 use std::{
     env,
     ffi::OsString,
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::Write,
-    os::unix::fs::{self as unix_fs, PermissionsExt},
+    os::unix::fs::{self as unix_fs, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
     thread,
@@ -218,7 +218,7 @@ fn start_recording(args: &Args) -> Result<()> {
     }
 
     let dir = state_dir(args)?;
-    ensure_private_dir(&dir)?;
+    prepare_state_dir(args, &dir)?;
 
     let stamp = unix_secs();
     let audio_path = dir.join(format!("recording-{stamp}.wav"));
@@ -303,23 +303,9 @@ fn stop_recording(args: &Args, cancel: bool) -> Result<()> {
         return Ok(());
     };
 
-    if pid_alive(state.pid) {
-        send_signal(state.pid, "INT")?;
-        wait_for_exit(state.pid, Duration::from_secs(5));
-    }
-
-    if pid_alive(state.pid) {
-        send_signal(state.pid, "TERM")?;
-        wait_for_exit(state.pid, Duration::from_secs(2));
-    }
-
-    if pid_alive(state.pid) {
-        send_signal(state.pid, "KILL")?;
-        wait_for_exit(state.pid, Duration::from_secs(1));
-    }
-
     if cancel {
         signal_incremental_cancel(state.incremental.as_ref());
+        stop_recorder(state.pid)?;
         terminate_incremental_worker(state.incremental.as_ref());
         let _ = fs::remove_file(&state_path);
         notify(args, "PickScribe", "Recording cancelled");
@@ -330,6 +316,7 @@ fn stop_recording(args: &Args, cancel: bool) -> Result<()> {
     }
 
     signal_incremental_stop(state.incremental.as_ref());
+    stop_recorder(state.pid)?;
     let _ = fs::remove_file(&state_path);
 
     let result = finish_recording(args, &state);
@@ -810,6 +797,33 @@ fn write_incremental_output(
     let data = serde_json::to_string_pretty(&output).context("failed to serialize output")?;
     fs::write(&tmp_path, data)
         .with_context(|| format!("failed to write {}", tmp_path.display()))?;
+    fs::rename(&tmp_path, path).with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn atomic_write_private(path: &Path, data: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let filename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("recording.json");
+    let tmp_path = path.with_file_name(format!(".{filename}.{}.tmp", std::process::id()));
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(&tmp_path)
+        .with_context(|| format!("failed to write {}", tmp_path.display()))?;
+    file.write_all(data)
+        .with_context(|| format!("failed to write {}", tmp_path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("failed to flush {}", tmp_path.display()))?;
+    drop(file);
+    fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("failed to restrict {}", tmp_path.display()))?;
     fs::rename(&tmp_path, path).with_context(|| format!("failed to write {}", path.display()))
 }
 
@@ -1754,6 +1768,14 @@ fn state_dir(args: &Args) -> Result<PathBuf> {
     Ok(PathBuf::from(format!("/tmp/pickscribe-{user}")))
 }
 
+fn prepare_state_dir(args: &Args, path: &Path) -> Result<()> {
+    if args.state_dir.is_some() {
+        fs::create_dir_all(path).with_context(|| format!("failed to create {}", path.display()))
+    } else {
+        ensure_private_dir(path)
+    }
+}
+
 fn ensure_private_dir(path: &Path) -> Result<()> {
     fs::create_dir_all(path).with_context(|| format!("failed to create {}", path.display()))?;
     let mut permissions = fs::metadata(path)
@@ -1811,7 +1833,7 @@ fn read_state_file(path: &Path) -> Result<Option<RecordingState>> {
 fn write_state(args: &Args, state: &RecordingState) -> Result<()> {
     let path = state_path(args)?;
     let data = serde_json::to_string_pretty(state).context("failed to serialize state")?;
-    fs::write(&path, data).with_context(|| format!("failed to write {}", path.display()))
+    atomic_write_private(&path, data.as_bytes())
 }
 
 fn unix_secs() -> u64 {
@@ -1836,6 +1858,25 @@ fn send_signal(pid: u32, signal: &str) -> Result<()> {
     } else {
         bail!("kill -{signal} {pid} exited with {status}");
     }
+}
+
+fn stop_recorder(pid: u32) -> Result<()> {
+    if pid_alive(pid) {
+        send_signal(pid, "INT")?;
+        wait_for_exit(pid, Duration::from_secs(5));
+    }
+
+    if pid_alive(pid) {
+        send_signal(pid, "TERM")?;
+        wait_for_exit(pid, Duration::from_secs(2));
+    }
+
+    if pid_alive(pid) {
+        send_signal(pid, "KILL")?;
+        wait_for_exit(pid, Duration::from_secs(1));
+    }
+
+    Ok(())
 }
 
 fn wait_for_exit(pid: u32, timeout: Duration) {
