@@ -26,6 +26,8 @@ then reset this file.
 - Wired the Tauri app incremental dictation path behind the disabled
   `[incremental]` flag, including live segment state, cancellation guards, and
   full-WAV fallback.
+- Added opt-in legacy CLI incremental transcription via `--incremental` or
+  `PICKSCRIBE_INCREMENTAL_DICTATION=1`, with final full-WAV fallback.
 
 ## Validation
 
@@ -42,6 +44,8 @@ then reset this file.
 - `cargo test --workspace --locked --all-targets`
 - `git diff --check`
 - Standalone `rustfmt --edition 2024` on touched Rust files.
+- Fake-recorder CLI incremental stop, cancel, active-STT cancel, and orphan
+  worker smoke checks.
 - `bun run test:installer`
 - Browser preview of `/?window=float` at `208x60`
 
