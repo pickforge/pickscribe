@@ -276,6 +276,44 @@
           ></button>
         </div>
       </div>
+      <div class="rows">
+        <div class="row">
+          <div>
+            <p class="row-label">Incremental transcription</p>
+            <p class="hint">Show finalized local transcript segments while recording.</p>
+          </div>
+          <button
+            type="button"
+            class="switch"
+            role="switch"
+            aria-checked={config.incremental.enabled}
+            aria-label="Incremental transcription"
+            onclick={() => {
+              config!.incremental.enabled = !config!.incremental.enabled;
+              if (!config!.incremental.enabled) config!.incremental.cleanup_segments = false;
+            }}
+          ></button>
+        </div>
+        <div class="row">
+          <div>
+            <p class="row-label">Clean partial transcript segments</p>
+            <p class="hint">
+              Sends finalized partial text to the cleanup provider before stop. Local-only mode
+              still blocks remote endpoints.
+            </p>
+          </div>
+          <button
+            type="button"
+            class="switch"
+            role="switch"
+            aria-checked={config.incremental.cleanup_segments}
+            aria-label="Clean partial transcript segments"
+            disabled={!config.incremental.enabled}
+            onclick={() =>
+              (config!.incremental.cleanup_segments = !config!.incremental.cleanup_segments)}
+          ></button>
+        </div>
+      </div>
     </div>
 
     <div class="panel card">

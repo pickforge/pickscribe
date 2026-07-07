@@ -13,6 +13,8 @@ then reset this file.
 - Linux curl installs now use a rootless AppImage wrapper that falls back on
   FUSE3-only systems and installs a launcher icon/menu entry.
 - Fixed the floating capsule waveform alignment.
+- Added opt-in segment cleanup controls for incremental dictation in Settings
+  and the legacy CLI.
 
 ## Internal/release changes
 
@@ -28,6 +30,8 @@ then reset this file.
   full-WAV fallback.
 - Added opt-in legacy CLI incremental transcription via `--incremental` or
   `PICKSCRIBE_INCREMENTAL_DICTATION=1`, with final full-WAV fallback.
+- Kept segment cleanup separate from incremental transcription and disabled by
+  default; final paste/history still use one final cleanup pass.
 
 ## Validation
 
@@ -42,10 +46,14 @@ then reset this file.
 - `cargo check --workspace --all-targets`
 - `cargo check -p pickscribe-app --features pickscribe-app/custom-protocol`
 - `cargo test --workspace --locked --all-targets`
+- `cargo llvm-cov --workspace --locked --all-targets --fail-under-lines 17
+  --lcov --output-path target/llvm-cov/lcov.info` with system LLVM tools
 - `git diff --check`
 - Standalone `rustfmt --edition 2024` on touched Rust files.
 - Fake-recorder CLI incremental stop, cancel, active-STT cancel, and orphan
   worker smoke checks.
+- Mocked CLI segment cleanup smoke checks for enabled cleanup, unsafe-mode
+  gating, and slow cleanup cancel/nonblocking behavior.
 - `bun run test:installer`
 - Browser preview of `/?window=float` at `208x60`
 

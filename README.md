@@ -29,7 +29,7 @@ The repo ships **PickScribe.app**, a Tauri 2 + Svelte 5 desktop app (same stack 
 - **Floating button** — a draggable always-on-top capsule that shows the live waveform while recording. Click it to open the app, right-click to toggle dictation. It never takes keyboard focus, so pasting still lands in your app.
 - **Sounds, not notifications** — short synthesized chimes on record start/stop/error (toggle in Settings).
 - **Tray** — left-click toggles dictation; the icon switches between idle and recording states.
-- **Settings** — system check (doctor), whisper model/language, cleanup provider + instructions, paste method/chord/delay, autostart, floating button, sounds.
+- **Settings** — system check (doctor), whisper model/language, incremental mode, cleanup provider + instructions, paste method/chord/delay, autostart, floating button, sounds.
 - **Local-only mode** — one switch that guarantees no text leaves the machine: only loopback cleanup endpoints (Ollama, LM Studio, llama.cpp server…) are allowed, remote providers are blocked and fall back to the raw transcript.
 - **Bring your own provider** — besides DeepSeek/OpenAI/Ollama there is a custom OpenAI-compatible provider (OpenRouter, OpenCode, vLLM…): point it at any `/chat/completions` URL with your own key, then hit "Fetch models" to pick from the provider's `/models` route — or just type the model name.
 
@@ -287,6 +287,19 @@ pickscribe stop --stdout-only
 PICKSCRIBE_INCREMENTAL_DICTATION=1 pickscribe start
 ```
 
+Segment cleanup is a separate opt-in because finalized partial text may reach
+the configured cleanup provider before you stop recording. Pass it when starting
+the worker with output-only or no-paste mode, or set the env var before start:
+
+```bash
+pickscribe start --incremental --incremental-cleanup --stdout-only
+PICKSCRIBE_INCREMENTAL_CLEANUP=1 PICKSCRIBE_INCREMENTAL_DICTATION=1 pickscribe start --no-paste
+```
+
+Segment cleanup always invokes the cleanup helper in stdout-only mode, so partial
+segments are never copied or pasted. The final stop still runs one final cleanup
+pass for coherent paste/history output.
+
 Cleanup helper:
 
 ```bash
@@ -317,6 +330,7 @@ Canonical PickScribe brand assets live in `assets/branding/`. The set follows th
 - Audio never leaves your machine. Recordings are transcribed locally with `whisper.cpp` and are never uploaded.
 - Cleanup sends text, never audio. When LLM cleanup is enabled, the transcribed text is sent to the configured LLM endpoint — DeepSeek by default — for the cleanup step, and nothing else.
 - Incremental mode writes partial transcripts only to the local runtime state directory while recording, then removes them on stop/cancel unless audio retention is enabled.
+- Segment cleanup is off by default. If explicitly enabled, finalized partial transcript text may be sent to the configured cleanup provider before you stop recording; audio still never leaves the machine.
 - Local-only mode keeps text on the machine too. It allows loopback cleanup endpoints (Ollama, LM Studio, llama.cpp server…) only, blocks remote providers, and falls back to the raw transcript.
 - Update checks contact GitHub. Packaged builds fetch the GitHub Releases `latest.json` on startup to see whether a newer version exists (version metadata only — never your transcripts, audio, or documents). This is independent of Local-only mode and cleanup.
 - API keys live in `~/.config/pickscribe/env`, which should be `chmod 600`.
