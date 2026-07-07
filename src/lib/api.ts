@@ -2,6 +2,15 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type Stage = "idle" | "recording" | "transcribing" | "cleaning" | "pasting";
 
+export type TranscriptSegmentStatus =
+  | "recording"
+  | "transcribing"
+  | "rawReady"
+  | "cleaning"
+  | "cleaned"
+  | "provisional"
+  | "failed";
+
 export interface HistoryEntry {
   id: number;
   created_at: number;
@@ -14,9 +23,20 @@ export interface HistoryEntry {
   word_count: number;
 }
 
+export interface TranscriptSegment {
+  id: number;
+  startMs: number;
+  endMs: number;
+  status: TranscriptSegmentStatus;
+  rawText: string;
+  cleanedText: string | null;
+  error: string | null;
+}
+
 export interface StatePayload {
   stage: Stage;
   recording_started_ms: number | null;
+  segments: TranscriptSegment[];
   message: string | null;
   error: string | null;
   last_entry: HistoryEntry | null;
@@ -164,4 +184,21 @@ export function formatError(err: unknown): string {
   if (typeof err === "string") return err;
   if (err instanceof Error) return err.message;
   return JSON.stringify(err);
+}
+
+export function segmentDisplayText(segment: TranscriptSegment): string {
+  const cleaned = segment.cleanedText?.trim();
+  return cleaned ? cleaned : segment.rawText.trim();
+}
+
+export function segmentStatusLabel(status: TranscriptSegmentStatus): string {
+  return {
+    recording: "Recording",
+    transcribing: "Transcribing",
+    rawReady: "Raw",
+    cleaning: "Cleaning",
+    cleaned: "Cleaned",
+    provisional: "Provisional",
+    failed: "Failed",
+  }[status];
 }

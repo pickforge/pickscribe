@@ -23,6 +23,9 @@ then reset this file.
   upgrades.
 - Added the disabled incremental dictation core foundation: segment/session
   assembly, WAV segment slicing, and mocked runner safeguards.
+- Wired the Tauri app incremental dictation path behind the disabled
+  `[incremental]` flag, including live segment state, cancellation guards, and
+  full-WAV fallback.
 
 ## Validation
 
@@ -38,13 +41,14 @@ then reset this file.
 - `cargo check -p pickscribe-app --features pickscribe-app/custom-protocol`
 - `cargo test --workspace --locked --all-targets`
 - `git diff --check`
+- Standalone `rustfmt --edition 2024` on touched Rust files.
 - `bun run test:installer`
 - Browser preview of `/?window=float` at `208x60`
 
 ### Not tested yet
 
-- `cargo fmt --all --check` because `rustfmt` is not installed in this
-  environment and `rustup` is unavailable.
+- `cargo fmt --all --check` because the active Cargo toolchain cannot find its
+  `cargo-fmt` component in this environment.
 - Updater flow.
 - Native-host smoke tests.
 

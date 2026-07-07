@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { desktopApiAvailable, formatDuration, formatError, formatMinutes } from "./api";
+import {
+  desktopApiAvailable,
+  formatDuration,
+  formatError,
+  formatMinutes,
+  segmentDisplayText,
+  segmentStatusLabel,
+  type TranscriptSegment,
+} from "./api";
 
 describe("desktopApiAvailable", () => {
   afterEach(() => {
@@ -38,5 +46,30 @@ describe("formatError", () => {
     expect(formatError("plain")).toBe("plain");
     expect(formatError(new Error("boom"))).toBe("boom");
     expect(formatError({ code: "E_PICKSCRIBE" })).toBe('{"code":"E_PICKSCRIBE"}');
+  });
+});
+
+describe("incremental transcript segments", () => {
+  const segment: TranscriptSegment = {
+    id: 1,
+    startMs: 0,
+    endMs: 5_000,
+    status: "rawReady",
+    rawText: "raw text",
+    cleanedText: null,
+    error: null,
+  };
+
+  it("uses camelCase payload fields and falls back to raw text", () => {
+    expect(segmentDisplayText(segment)).toBe("raw text");
+    expect(segmentDisplayText({ ...segment, cleanedText: " cleaned text " })).toBe(
+      "cleaned text"
+    );
+    expect(segmentDisplayText({ ...segment, cleanedText: " " })).toBe("raw text");
+  });
+
+  it("labels segment statuses without widening app stages", () => {
+    expect(segmentStatusLabel("rawReady")).toBe("Raw");
+    expect(segmentStatusLabel("failed")).toBe("Failed");
   });
 });

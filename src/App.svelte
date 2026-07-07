@@ -29,6 +29,7 @@
   let dictation = $state<StatePayload>({
     stage: "idle",
     recording_started_ms: null,
+    segments: [],
     message: null,
     error: null,
     last_entry: null,
@@ -107,8 +108,17 @@
         .then((u) => unsubs.push(u));
     });
 
-    api.getState().then((s) => (dictation = s)).catch(() => {});
+    let receivedStateEvent = false;
+    api
+      .getState()
+      .then((s) => {
+        if (!receivedStateEvent) {
+          dictation = s;
+        }
+      })
+      .catch(() => {});
     listen<StatePayload>(EVENT_STATE, (event) => {
+      receivedStateEvent = true;
       dictation = event.payload;
       if (event.payload.stage === "idle") {
         levels = Array(LEVEL_BARS).fill(0);
