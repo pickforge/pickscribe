@@ -12,10 +12,15 @@ use std::{
     env,
     ffi::OsString,
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     os::unix::fs::{self as unix_fs, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -115,6 +120,10 @@ struct Args {
     #[arg(long)]
     incremental: bool,
 
+    /// Clean finalized incremental chunks while recording. Runs cleanup in stdout-only mode.
+    #[arg(long)]
+    incremental_cleanup: bool,
+
     #[arg(long, hide = true)]
     run_incremental_worker: bool,
 
@@ -177,6 +186,23 @@ struct IncrementalWorkerOutput {
     fallback_required: bool,
     error: Option<String>,
     updated_unix_secs: u64,
+}
+
+struct SegmentCleanupWorker {
+    cancel: Arc<AtomicBool>,
+    jobs_tx: Option<mpsc::SyncSender<TranscriptSegment>>,
+    results_rx: mpsc::Receiver<TranscriptSegment>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for SegmentCleanupWorker {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::SeqCst);
+        self.jobs_tx.take();
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -496,6 +522,21 @@ fn append_worker_args(cmd: &mut Command, args: &Args) {
     if let Some(stt_command) = args.stt_command.as_deref() {
         cmd.arg("--stt-command").arg(stt_command);
     }
+    if let Some(cleanup_command) = args.cleanup_command.as_deref() {
+        cmd.arg("--cleanup-command").arg(cleanup_command);
+    }
+    if args.no_llm {
+        cmd.arg("--no-llm");
+    }
+    if args.stdout_only {
+        cmd.arg("--stdout-only");
+    }
+    if args.no_paste {
+        cmd.arg("--no-paste");
+    }
+    if args.incremental_cleanup {
+        cmd.arg("--incremental-cleanup");
+    }
     if args.keep_audio {
         cmd.arg("--keep-audio");
     }
@@ -545,10 +586,30 @@ fn run_incremental_worker_loop(
     let stopping_path = incremental_stopping_path(worker);
     let startup_deadline = Instant::now() + Duration::from_secs(30);
     let mut saw_state_file = state_file.exists();
+    let local_only = AppConfig::load().general.local_only;
+    let cleanup_worker = if incremental_segment_cleanup_enabled(args) {
+        Some(start_segment_cleanup_worker(
+            args,
+            worker,
+            &state_file,
+            &stopping_path,
+            state.pid,
+            local_only,
+        ))
+    } else {
+        None
+    };
 
     write_incremental_output(&worker.output_path, &mut session, false, false, None)?;
 
     while !worker.cancel_path.exists() {
+        drain_segment_cleanup_results(
+            worker,
+            &mut session,
+            cleanup_worker.as_ref(),
+            fallback_required,
+        )?;
+
         let final_requested = worker.stop_path.exists();
         let stopping_requested = stopping_path.exists();
         if state_file.exists() {
@@ -677,12 +738,30 @@ fn run_incremental_worker_loop(
         }
 
         match result {
-            Ok(text) => session.upsert_segment(TranscriptSegment::raw_ready(
-                segment_id,
-                slice.start_ms,
-                slice.end_ms,
-                text,
-            )),
+            Ok(text) => {
+                let raw = TranscriptSegment::raw_ready(
+                    segment_id,
+                    slice.start_ms,
+                    slice.end_ms,
+                    text.clone(),
+                );
+                session.upsert_segment(raw.clone());
+                write_incremental_output(
+                    &worker.output_path,
+                    &mut session,
+                    false,
+                    fallback_required,
+                    None,
+                )?;
+
+                queue_segment_cleanup(
+                    worker,
+                    &mut session,
+                    cleanup_worker.as_ref(),
+                    raw,
+                    fallback_required,
+                )?;
+            }
             Err(err) => {
                 fallback_required = true;
                 session.upsert_segment(TranscriptSegment::failed(
@@ -711,6 +790,14 @@ fn run_incremental_worker_loop(
         }
     }
 
+    drain_segment_cleanup_results(
+        worker,
+        &mut session,
+        cleanup_worker.as_ref(),
+        fallback_required,
+    )?;
+    stop_segment_cleanup_worker(cleanup_worker);
+
     if worker.cancel_path.exists() {
         return Ok(());
     }
@@ -722,6 +809,128 @@ fn run_incremental_worker_loop(
         fallback_required,
         None,
     )
+}
+
+fn start_segment_cleanup_worker(
+    args: &Args,
+    worker: &IncrementalWorkerState,
+    state_file: &Path,
+    stopping_path: &Path,
+    recorder_pid: u32,
+    local_only: bool,
+) -> SegmentCleanupWorker {
+    let queue_size = incremental_config().max_queue.max(1);
+    let (jobs_tx, jobs_rx) = mpsc::sync_channel::<TranscriptSegment>(queue_size);
+    let (results_tx, results_rx) = mpsc::channel::<TranscriptSegment>();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let worker_cancel = Arc::clone(&cancel);
+    let args = args.clone();
+    let worker = worker.clone();
+    let state_file = state_file.to_path_buf();
+    let stopping_path = stopping_path.to_path_buf();
+    let handle = thread::spawn(move || {
+        while let Ok(raw) = jobs_rx.recv() {
+            if worker_cancel.load(Ordering::SeqCst)
+                || segment_cleanup_cancelled(&worker, &state_file, &stopping_path, recorder_pid)
+            {
+                break;
+            }
+
+            let result = cleanup_segment_text(&args, &raw.raw_text, local_only, || {
+                worker_cancel.load(Ordering::SeqCst)
+                    || segment_cleanup_cancelled(&worker, &state_file, &stopping_path, recorder_pid)
+            });
+            if worker_cancel.load(Ordering::SeqCst)
+                || segment_cleanup_cancelled(&worker, &state_file, &stopping_path, recorder_pid)
+            {
+                break;
+            }
+
+            let segment = match result {
+                Ok(Some(cleaned)) => TranscriptSegment {
+                    status: TranscriptSegmentStatus::Cleaned,
+                    cleaned_text: Some(cleaned),
+                    ..raw
+                },
+                Ok(None) | Err(_) => raw,
+            };
+            if results_tx.send(segment).is_err() {
+                break;
+            }
+        }
+    });
+
+    SegmentCleanupWorker {
+        cancel,
+        jobs_tx: Some(jobs_tx),
+        results_rx,
+        handle: Some(handle),
+    }
+}
+
+fn segment_cleanup_cancelled(
+    worker: &IncrementalWorkerState,
+    state_file: &Path,
+    stopping_path: &Path,
+    recorder_pid: u32,
+) -> bool {
+    worker.cancel_path.exists()
+        || (!worker.stop_path.exists()
+            && !stopping_path.exists()
+            && (!state_file.exists() || !pid_alive(recorder_pid)))
+}
+
+fn queue_segment_cleanup(
+    worker: &IncrementalWorkerState,
+    session: &mut RecordingSession,
+    cleanup_worker: Option<&SegmentCleanupWorker>,
+    raw: TranscriptSegment,
+    fallback_required: bool,
+) -> Result<()> {
+    if raw.raw_text.trim().is_empty() {
+        return Ok(());
+    }
+    let Some(cleanup_worker) = cleanup_worker else {
+        return Ok(());
+    };
+
+    let Some(jobs_tx) = cleanup_worker.jobs_tx.as_ref() else {
+        return Ok(());
+    };
+
+    if jobs_tx.try_send(raw.clone()).is_ok() {
+        session.upsert_segment(TranscriptSegment {
+            status: TranscriptSegmentStatus::Cleaning,
+            ..raw
+        });
+        write_incremental_output(&worker.output_path, session, false, fallback_required, None)?;
+    }
+    Ok(())
+}
+
+fn drain_segment_cleanup_results(
+    worker: &IncrementalWorkerState,
+    session: &mut RecordingSession,
+    cleanup_worker: Option<&SegmentCleanupWorker>,
+    fallback_required: bool,
+) -> Result<()> {
+    let Some(cleanup_worker) = cleanup_worker else {
+        return Ok(());
+    };
+
+    let mut changed = false;
+    while let Ok(segment) = cleanup_worker.results_rx.try_recv() {
+        session.upsert_segment(segment);
+        changed = true;
+    }
+    if changed {
+        write_incremental_output(&worker.output_path, session, false, fallback_required, None)?;
+    }
+    Ok(())
+}
+
+fn stop_segment_cleanup_worker(cleanup_worker: Option<SegmentCleanupWorker>) {
+    drop(cleanup_worker);
 }
 
 fn incremental_transcript(worker: Option<&IncrementalWorkerState>) -> Option<String> {
@@ -761,6 +970,12 @@ fn final_incremental_text(
     }
     let text = output.session.final_raw_text();
     (!text.trim().is_empty()).then_some(text)
+}
+
+fn incremental_segment_cleanup_enabled(args: &Args) -> bool {
+    !args.no_llm
+        && (args.stdout_only || args.no_paste)
+        && (args.incremental_cleanup || env_flag_enabled("PICKSCRIBE_INCREMENTAL_CLEANUP"))
 }
 
 fn signal_incremental_stop(worker: Option<&IncrementalWorkerState>) {
@@ -1765,17 +1980,18 @@ fn escape_env_double_quoted(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn run_cleanup(args: &Args, transcript: &str) -> Result<()> {
-    let cleanup = args
-        .cleanup_command
+fn resolve_cleanup_command(args: &Args) -> Result<PathBuf> {
+    args.cleanup_command
         .as_ref()
         .map(PathBuf::from)
         .or_else(|| find_command("pickscribe-cleanup-gui"))
         .or_else(|| find_command("pickscribe-cleanup"))
         .or_else(|| find_command("voice-cleanup-gui"))
         .or_else(|| find_command("voice-cleanup"))
-        .ok_or_else(|| anyhow!("pickscribe-cleanup not found; install this project first"))?;
+        .ok_or_else(|| anyhow!("pickscribe-cleanup not found; install this project first"))
+}
 
+fn final_cleanup_args(args: &Args) -> Vec<OsString> {
     let mut cleanup_args: Vec<OsString> = Vec::new();
     if args.stdout_only {
         cleanup_args.push("--stdout-only".into());
@@ -1793,6 +2009,12 @@ fn run_cleanup(args: &Args, transcript: &str) -> Result<()> {
     if args.no_llm {
         cleanup_args.push("--no-llm".into());
     }
+    cleanup_args
+}
+
+fn run_cleanup(args: &Args, transcript: &str) -> Result<()> {
+    let cleanup = resolve_cleanup_command(args)?;
+    let cleanup_args = final_cleanup_args(args);
 
     let mut child = Command::new(&cleanup)
         .args(cleanup_args)
@@ -1815,6 +2037,64 @@ fn run_cleanup(args: &Args, transcript: &str) -> Result<()> {
     } else {
         bail!("cleanup command exited with {status}");
     }
+}
+
+fn cleanup_segment_text(
+    args: &Args,
+    transcript: &str,
+    local_only: bool,
+    is_cancelled: impl Fn() -> bool,
+) -> Result<Option<String>> {
+    let cleanup = resolve_cleanup_command(args)?;
+    if local_only && args.cleanup_command.is_some() {
+        bail!("local-only mode blocks custom CLI segment cleanup commands");
+    }
+    let mut cleanup_args: Vec<OsString> = vec!["--stdout-only".into()];
+    if local_only {
+        cleanup_args.push("--local-only".into());
+    }
+    if args.no_llm {
+        cleanup_args.push("--no-llm".into());
+    }
+
+    let (mut cmd, process_group) = cancellable_program_command(&cleanup);
+    cmd.args(cleanup_args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("failed to start cleanup command `{}`", cleanup.display()))?;
+
+    {
+        let mut stdin = child.stdin.take().context("failed to open cleanup stdin")?;
+        stdin
+            .write_all(transcript.as_bytes())
+            .context("failed to send transcript to cleanup command")?;
+    }
+
+    let stdout = child
+        .stdout
+        .take()
+        .context("failed to open cleanup stdout")?;
+    let stdout_reader = thread::spawn(move || -> Result<String> {
+        let mut child_stdout = stdout;
+        let mut output = String::new();
+        child_stdout
+            .read_to_string(&mut output)
+            .context("failed to read cleanup stdout")?;
+        Ok(output)
+    });
+    let status = wait_for_cancellable_child(&mut child, process_group, is_cancelled)
+        .context("failed to wait for cleanup command")?;
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| anyhow!("cleanup stdout reader panicked"))??;
+    if !status.success() {
+        bail!("cleanup command exited with {}", status);
+    }
+    let cleaned = stdout.trim().to_string();
+    Ok((!cleaned.is_empty()).then_some(cleaned))
 }
 
 fn cleanup_transcript(text: &str) -> String {
@@ -2043,6 +2323,19 @@ fn shell_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn parse_args(values: &[&str]) -> Args {
+        Args::parse_from(values)
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        env::temp_dir().join(format!("pickscribe-{name}-{id}"))
+    }
 
     fn worker_state(session_id: &str) -> IncrementalWorkerState {
         let temp_dir = PathBuf::from("/tmp/pickscribe-test").join(session_id);
@@ -2075,6 +2368,79 @@ mod tests {
         let transcript = " first line\n\nsecond line \n[inaudible]\n";
 
         assert_eq!(cleanup_transcript(transcript), "first line second line");
+    }
+
+    #[test]
+    fn incremental_segment_cleanup_requires_opt_in_and_llm_cleanup() {
+        let args = parse_args(&["pickscribe"]);
+        assert!(!incremental_segment_cleanup_enabled(&args));
+
+        let args = parse_args(&["pickscribe", "--incremental-cleanup"]);
+        assert!(!incremental_segment_cleanup_enabled(&args));
+
+        let args = parse_args(&["pickscribe", "--incremental-cleanup", "--stdout-only"]);
+        assert!(incremental_segment_cleanup_enabled(&args));
+
+        let args = parse_args(&["pickscribe", "--incremental-cleanup", "--no-paste"]);
+        assert!(incremental_segment_cleanup_enabled(&args));
+
+        let args = parse_args(&[
+            "pickscribe",
+            "--incremental-cleanup",
+            "--stdout-only",
+            "--no-llm",
+        ]);
+        assert!(!incremental_segment_cleanup_enabled(&args));
+    }
+
+    #[test]
+    fn cleanup_segment_text_uses_stdout_only_cleanup_command() -> Result<()> {
+        let dir = temp_dir("segment-cleanup");
+        fs::create_dir_all(&dir)?;
+        let script = dir.join("cleanup.sh");
+        fs::write(
+            &script,
+            "#!/usr/bin/env bash\nwhile [[ ${1-} == --* ]]; do shift; done\ntr '[:lower:]' '[:upper:]'\n",
+        )?;
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755))?;
+        let args = parse_args(&["pickscribe", "--cleanup-command", script.to_str().unwrap()]);
+
+        let cleaned = cleanup_segment_text(&args, "hello segment", false, || false)?;
+
+        assert_eq!(cleaned.as_deref(), Some("HELLO SEGMENT"));
+        let _ = fs::remove_dir_all(dir);
+        Ok(())
+    }
+
+    #[test]
+    fn cleanup_segment_text_blocks_custom_commands_in_local_only_mode() -> Result<()> {
+        let args = parse_args(&["pickscribe", "--cleanup-command", "/bin/true"]);
+
+        let err = cleanup_segment_text(&args, "hello segment", true, || false)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("local-only mode blocks custom CLI segment cleanup commands"));
+        Ok(())
+    }
+
+    #[test]
+    fn cleanup_segment_text_drains_large_stdout() -> Result<()> {
+        let dir = temp_dir("segment-cleanup-large-stdout");
+        fs::create_dir_all(&dir)?;
+        let script = dir.join("cleanup.sh");
+        fs::write(
+            &script,
+            "#!/usr/bin/env bash\npython3 - <<'PY'\nprint('x' * 200000)\nPY\n",
+        )?;
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755))?;
+        let args = parse_args(&["pickscribe", "--cleanup-command", script.to_str().unwrap()]);
+
+        let cleaned = cleanup_segment_text(&args, "hello segment", false, || false)?;
+
+        assert_eq!(cleaned.as_deref().map(str::len), Some(200000));
+        let _ = fs::remove_dir_all(dir);
+        Ok(())
     }
 
     #[test]

@@ -81,6 +81,18 @@ struct IncrementalWorker {
     stop_requested: Arc<AtomicBool>,
 }
 
+struct SegmentCleanupWorker {
+    cancel_token: CancelToken,
+    jobs_tx: mpsc::SyncSender<TranscriptSegment>,
+    results_rx: mpsc::Receiver<TranscriptSegment>,
+}
+
+impl Drop for SegmentCleanupWorker {
+    fn drop(&mut self) {
+        self.cancel_token.cancel();
+    }
+}
+
 #[derive(Clone)]
 struct SessionControl {
     id: String,
@@ -642,6 +654,11 @@ fn run_incremental_worker(worker: IncrementalWorker) -> IncrementalDone {
     let mut segment_id = 0u64;
     let mut fallback_required = false;
     let mut complete = false;
+    let cleanup_worker = worker
+        .cfg
+        .incremental
+        .cleanup_segments
+        .then(|| start_segment_cleanup_worker(&worker));
 
     let target_ms = worker.cfg.incremental.target_ms.max(1_000);
     let max_ms = worker.cfg.incremental.max_ms.max(target_ms);
@@ -653,6 +670,8 @@ fn run_incremental_worker(worker: IncrementalWorker) -> IncrementalDone {
             .engine
             .is_session_current(&worker.session_id, &worker.session_token)
     {
+        drain_segment_cleanup_results(&worker, &mut session, cleanup_worker.as_ref());
+
         let final_requested = worker.stop_requested.load(Ordering::SeqCst);
         let available_ms = growing_audio_duration_ms(&worker.audio_path).unwrap_or(0);
         if available_ms <= next_start_ms.saturating_add(250) {
@@ -774,12 +793,18 @@ fn run_incremental_worker(worker: IncrementalWorker) -> IncrementalDone {
         }
 
         match result {
-            Ok(text) => session.upsert_segment(TranscriptSegment::raw_ready(
-                segment_id,
-                slice.start_ms,
-                slice.end_ms,
-                text,
-            )),
+            Ok(text) => {
+                let raw = TranscriptSegment::raw_ready(
+                    segment_id,
+                    slice.start_ms,
+                    slice.end_ms,
+                    text.clone(),
+                );
+                session.upsert_segment(raw.clone());
+                emit_incremental_session(&worker, &session);
+
+                queue_segment_cleanup(&worker, &mut session, cleanup_worker.as_ref(), raw);
+            }
             Err(err) => {
                 fallback_required = true;
                 session.upsert_segment(TranscriptSegment::failed(
@@ -799,6 +824,7 @@ fn run_incremental_worker(worker: IncrementalWorker) -> IncrementalDone {
         }
     }
 
+    drain_segment_cleanup_results(&worker, &mut session, cleanup_worker.as_ref());
     if !worker.cfg.general.keep_audio {
         let _ = incremental::cleanup_session_dir(&worker.temp_dir, false);
     }
@@ -812,6 +838,98 @@ fn run_incremental_worker(worker: IncrementalWorker) -> IncrementalDone {
                 .is_session_current(&worker.session_id, &worker.session_token)
             && !fallback_required,
         fallback_required,
+    }
+}
+
+fn start_segment_cleanup_worker(worker: &IncrementalWorker) -> SegmentCleanupWorker {
+    let queue_size = worker.cfg.incremental.max_queue.max(1);
+    let (jobs_tx, jobs_rx) = mpsc::sync_channel::<TranscriptSegment>(queue_size);
+    let (results_tx, results_rx) = mpsc::channel::<TranscriptSegment>();
+    let cleanup_cancel_token = CancelToken::new();
+    let cfg = worker.cfg.clone();
+    let engine = Arc::clone(&worker.engine);
+    let session_id = worker.session_id.clone();
+    let session_token = worker.session_token.clone();
+    let worker_cancel_token = worker.worker_cancel_token.clone();
+    let thread_cancel_token = cleanup_cancel_token.clone();
+
+    std::thread::spawn(move || {
+        while let Ok(raw) = jobs_rx.recv() {
+            if thread_cancel_token.is_cancelled()
+                || worker_cancel_token.is_cancelled()
+                || !engine.is_session_current(&session_id, &session_token)
+            {
+                break;
+            }
+
+            let outcome = cleanup::clean(&cfg, &raw.raw_text);
+            if thread_cancel_token.is_cancelled()
+                || worker_cancel_token.is_cancelled()
+                || !engine.is_session_current(&session_id, &session_token)
+            {
+                break;
+            }
+
+            let segment = if outcome.cleaned {
+                TranscriptSegment {
+                    status: TranscriptSegmentStatus::Cleaned,
+                    cleaned_text: Some(outcome.text),
+                    ..raw
+                }
+            } else {
+                raw
+            };
+            if results_tx.send(segment).is_err() {
+                break;
+            }
+        }
+    });
+
+    SegmentCleanupWorker {
+        cancel_token: cleanup_cancel_token,
+        jobs_tx,
+        results_rx,
+    }
+}
+
+fn queue_segment_cleanup(
+    worker: &IncrementalWorker,
+    session: &mut RecordingSession,
+    cleanup_worker: Option<&SegmentCleanupWorker>,
+    raw: TranscriptSegment,
+) {
+    if raw.raw_text.trim().is_empty() {
+        return;
+    }
+    let Some(cleanup_worker) = cleanup_worker else {
+        return;
+    };
+
+    if cleanup_worker.jobs_tx.try_send(raw.clone()).is_ok() {
+        session.upsert_segment(TranscriptSegment {
+            status: TranscriptSegmentStatus::Cleaning,
+            ..raw
+        });
+        emit_incremental_session(worker, session);
+    }
+}
+
+fn drain_segment_cleanup_results(
+    worker: &IncrementalWorker,
+    session: &mut RecordingSession,
+    cleanup_worker: Option<&SegmentCleanupWorker>,
+) {
+    let Some(cleanup_worker) = cleanup_worker else {
+        return;
+    };
+
+    let mut changed = false;
+    while let Ok(segment) = cleanup_worker.results_rx.try_recv() {
+        session.upsert_segment(segment);
+        changed = true;
+    }
+    if changed {
+        emit_incremental_session(worker, session);
     }
 }
 

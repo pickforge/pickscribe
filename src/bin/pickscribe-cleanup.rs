@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, ValueEnum};
+use pickscribe::engine::cleanup::is_local_endpoint;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -120,6 +121,10 @@ struct Args {
     /// Suppress non-fatal warnings.
     #[arg(long)]
     quiet: bool,
+
+    /// Restrict cleanup to loopback endpoints. Used by incremental segment cleanup.
+    #[arg(long, env = "PICKSCRIBE_LOCAL_ONLY", hide = true)]
+    local_only: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -368,6 +373,7 @@ fn deepseek_thinking_payload(args: &Args, provider: Provider) -> Option<Thinking
 
 fn resolve_llm_config(args: &Args) -> Result<LlmConfig> {
     let provider = match args.provider {
+        Provider::Auto if args.local_only => Provider::Ollama,
         Provider::Auto => {
             if env::var_os("DEEPSEEK_API_KEY").is_some() || args.api_key.is_some() {
                 Provider::Deepseek
@@ -401,6 +407,17 @@ fn resolve_llm_config(args: &Args) -> Result<LlmConfig> {
         Provider::Ollama => env::var("OLLAMA_API_KEY").ok(),
         Provider::None | Provider::Auto => None,
     });
+
+    if args.local_only && !is_local_endpoint(&endpoint) {
+        return Err(anyhow!(
+            "local-only mode blocks remote endpoint {endpoint}; use Ollama or disable cleanup"
+        ));
+    }
+    if args.local_only && model.ends_with(":cloud") {
+        return Err(anyhow!(
+            "local-only mode blocks {model}; Ollama ':cloud' models run outside this machine"
+        ));
+    }
 
     Ok(LlmConfig {
         provider,
@@ -637,5 +654,66 @@ fn command_exists(program: &str) -> bool {
 fn warn(args: &Args, message: std::fmt::Arguments<'_>) {
     if !args.quiet {
         eprintln!("warning: {message}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_args(values: &[&str]) -> Args {
+        Args::parse_from(values)
+    }
+
+    #[test]
+    fn local_only_blocks_remote_cleanup_endpoint() {
+        let args = parse_args(&[
+            "pickscribe-cleanup",
+            "--local-only",
+            "--provider",
+            "openai",
+            "--api-key",
+            "test-key",
+            "hello",
+        ]);
+
+        let err = resolve_llm_config(&args).unwrap_err().to_string();
+
+        assert!(err.contains("local-only mode blocks remote endpoint"));
+    }
+
+    #[test]
+    fn local_only_blocks_ollama_cloud_models() {
+        let args = parse_args(&[
+            "pickscribe-cleanup",
+            "--local-only",
+            "--provider",
+            "ollama",
+            "--model",
+            "deepseek-r1:cloud",
+            "hello",
+        ]);
+
+        let err = resolve_llm_config(&args).unwrap_err().to_string();
+
+        assert!(err.contains(":cloud"));
+    }
+
+    #[test]
+    fn local_only_auto_provider_prefers_ollama_even_with_remote_key() {
+        let args = parse_args(&[
+            "pickscribe-cleanup",
+            "--local-only",
+            "--provider",
+            "auto",
+            "--api-key",
+            "remote-key",
+            "hello",
+        ]);
+
+        let config = resolve_llm_config(&args).unwrap();
+
+        assert_eq!(config.provider, Provider::Ollama);
+        assert!(is_local_endpoint(&config.endpoint));
     }
 }
