@@ -59,13 +59,13 @@ On Wayland the app runs natively (smooth WebKitGTK scrolling). The floating butt
 
 ## Install
 
-**Quick install** (desktop app, Linux AppImage, no sudo):
+**Quick install** (Linux AppImage with FUSE fallback, no sudo):
 
 ```sh
 curl -fsSL https://pickforge.dev/pickscribe/install.sh | sh
 ```
 
-Installs the latest [release](https://github.com/pickforge/pickscribe/releases) AppImage into your home. The dictation engine (whisper.cpp, ydotool paste automation) is set up by building from source below.
+Installs the latest [release](https://github.com/pickforge/pickscribe/releases) AppImage into your home, adds an app-menu launcher, and falls back automatically on FUSE3-only systems. The dictation engine (whisper.cpp, ydotool paste automation) is set up by building from source below.
 
 Download the latest `.deb` or `.AppImage` from [Releases](https://github.com/pickforge/pickscribe/releases/latest). PickScribe ships Linux only for now: install the `.deb` with your package manager, or `chmod +x` the `.AppImage` and run it. Updates arrive through the in-app updater.
 

@@ -10,12 +10,16 @@ then reset this file.
   while macOS and Windows show the native work still required before release.
 - Updated install and release messaging so PickScribe no longer claims
   native-host smoke checks are automated.
+- Linux curl installs now use a rootless AppImage wrapper that falls back on
+  FUSE3-only systems and installs a launcher icon/menu entry.
 
 ## Internal/release changes
 
 - Added repo-local release tracking in `docs/releases/UNRELEASED.md`.
 - Added a shared platform-support contract used by the app doctor, dictation
   start guard, dashboard state, and release docs.
+- Added installer smoke tests for AppImage desktop integration and symlink-safe
+  upgrades.
 
 ## Validation
 
@@ -31,10 +35,11 @@ then reset this file.
 - `cargo check -p pickscribe-app --features pickscribe-app/custom-protocol`
 - `cargo test --workspace --locked --all-targets`
 - `git diff --check`
+- `bun run test:installer`
 
 ### Not tested yet
 
-- Installer or updater flow.
+- Updater flow.
 - Native-host smoke tests.
 
 ### Release blockers
