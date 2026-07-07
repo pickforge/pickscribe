@@ -56,4 +56,10 @@
   });
 </script>
 
-<canvas bind:this={canvas}></canvas>
+<canvas class="waveform-canvas" bind:this={canvas}></canvas>
+
+<style>
+  .waveform-canvas {
+    display: block;
+  }
+</style>
