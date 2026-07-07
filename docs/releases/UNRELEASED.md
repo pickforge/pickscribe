@@ -12,6 +12,7 @@ then reset this file.
   native-host smoke checks are automated.
 - Linux curl installs now use a rootless AppImage wrapper that falls back on
   FUSE3-only systems and installs a launcher icon/menu entry.
+- Fixed the floating capsule waveform alignment.
 
 ## Internal/release changes
 
@@ -36,6 +37,7 @@ then reset this file.
 - `cargo test --workspace --locked --all-targets`
 - `git diff --check`
 - `bun run test:installer`
+- Browser preview of `/?window=float` at `208x60`
 
 ### Not tested yet
 
