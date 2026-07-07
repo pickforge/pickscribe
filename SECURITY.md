@@ -6,6 +6,7 @@ PickScribe is a local-first Linux dictation app. It records your microphone, tra
 
 - **Audio never leaves your machine.** Recordings are transcribed locally with the bundled `whisper.cpp` flow and are never uploaded.
 - **Cleanup sends text, never audio.** When LLM cleanup is enabled, only the transcribed text is sent to the configured LLM endpoint — DeepSeek by default — and only for the cleanup step.
+- **Incremental mode stays local.** Opt-in incremental dictation may write partial transcript JSON under the local runtime state directory while recording. Those files are removed on stop/cancel unless audio retention is enabled.
 - **Local-only mode.** One switch restricts cleanup to loopback endpoints (Ollama, LM Studio, llama.cpp server…), blocks remote providers, and falls back to the raw transcript — so no text leaves the machine either.
 - **No telemetry.** PickScribe makes no analytics or telemetry calls. Outbound requests are limited to the optional cleanup call described above and the startup update check below.
 - **Update check.** Packaged builds check GitHub Releases for a newer version on startup (they fetch the release `latest.json` — version metadata only, never your transcripts, audio, or documents). This runs even in Local-only mode and with cleanup disabled.
@@ -16,6 +17,7 @@ PickScribe is a local-first Linux dictation app. It records your microphone, tra
 | Data | Leaves the machine? | When |
 | --- | --- | --- |
 | Microphone audio | Never | Transcribed locally with `whisper.cpp` |
+| Incremental partial transcript text | Never | Stored temporarily in the runtime state directory while opt-in incremental mode is active |
 | Transcribed text | Only with LLM cleanup enabled and Local-only mode off | Sent to the configured endpoint (DeepSeek by default) for cleanup |
 | API keys, history, settings | Never | Stored locally under `~/.config/pickscribe` and `~/.local/share/pickscribe` |
 | App update check | Yes — a request to GitHub | On startup (packaged builds); fetches the release `latest.json` to compare versions. No document or audio content is sent. |

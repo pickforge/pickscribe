@@ -1,19 +1,26 @@
 use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, ValueEnum};
+use pickscribe::{
+    config::{AppConfig, IncrementalConfig},
+    engine::{
+        audio_segments,
+        segments::{RecordingSession, TranscriptSegment, TranscriptSegmentStatus},
+    },
+};
 use serde::{Deserialize, Serialize};
 use std::{
     env,
     ffi::OsString,
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::Write,
-    os::unix::fs as unix_fs,
+    os::unix::fs::{self as unix_fs, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-#[derive(Debug, Parser)]
+#[derive(Clone, Debug, Parser)]
 #[command(
     name = "pickscribe",
     about = "PickScribe by Pickforge Studio: toggle record -> local Whisper STT -> AI cleanup -> paste"
@@ -103,6 +110,16 @@ struct Args {
     /// Disable desktop notifications.
     #[arg(long)]
     no_notify: bool,
+
+    /// Transcribe finalized chunks while recording; final output still uses one cleanup pass.
+    #[arg(long)]
+    incremental: bool,
+
+    #[arg(long, hide = true)]
+    run_incremental_worker: bool,
+
+    #[arg(long, hide = true)]
+    incremental_worker_state: Option<PathBuf>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -128,16 +145,46 @@ enum AutoUpdateWhisper {
     Install,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct RecordingState {
     pid: u32,
     audio_path: PathBuf,
     log_path: PathBuf,
     started_unix_secs: u64,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    incremental: Option<IncrementalWorkerState>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct IncrementalWorkerState {
+    pid: u32,
+    #[serde(default)]
+    worker_started_ticks: Option<u64>,
+    session_id: String,
+    temp_dir: PathBuf,
+    output_path: PathBuf,
+    stop_path: PathBuf,
+    cancel_path: PathBuf,
+    log_path: PathBuf,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct IncrementalWorkerOutput {
+    session: RecordingSession,
+    complete: bool,
+    fallback_required: bool,
+    error: Option<String>,
+    updated_unix_secs: u64,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    if args.run_incremental_worker {
+        return run_incremental_worker_command(&args);
+    }
 
     match args.action {
         Action::Toggle => toggle(&args),
@@ -176,7 +223,7 @@ fn start_recording(args: &Args) -> Result<()> {
     }
 
     let dir = state_dir(args)?;
-    fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
+    prepare_state_dir(args, &dir)?;
 
     let stamp = unix_secs();
     let audio_path = dir.join(format!("recording-{stamp}.wav"));
@@ -212,11 +259,13 @@ fn start_recording(args: &Args) -> Result<()> {
         .spawn()
         .with_context(|| format!("failed to start recorder command `{}`", args.recorder))?;
 
-    let state = RecordingState {
+    let mut state = RecordingState {
         pid: child.id(),
         audio_path,
         log_path,
         started_unix_secs: stamp,
+        session_id: None,
+        incremental: None,
     };
 
     thread::sleep(Duration::from_millis(250));
@@ -225,7 +274,30 @@ fn start_recording(args: &Args) -> Result<()> {
         bail!("recorder exited immediately. Log:\n{log}");
     }
 
-    write_state(args, &state)?;
+    if incremental_enabled(args) {
+        match start_incremental_worker(args, &dir, &mut state) {
+            Ok(()) => {}
+            Err(err) => {
+                notify(
+                    args,
+                    "PickScribe",
+                    "Incremental transcription unavailable; using final pass.",
+                );
+                eprintln!("warning: incremental transcription unavailable: {err:#}");
+                state.session_id = None;
+                state.incremental = None;
+            }
+        }
+    }
+
+    if let Err(err) = write_state(args, &state) {
+        signal_incremental_cancel(state.incremental.as_ref());
+        stop_recorder(state.pid)?;
+        terminate_incremental_worker(state.incremental.as_ref());
+        cleanup_files(args, &state, None);
+        cleanup_incremental_files(args, state.incremental.as_ref());
+        return Err(err);
+    }
     notify(
         args,
         "PickScribe",
@@ -243,30 +315,37 @@ fn stop_recording(args: &Args, cancel: bool) -> Result<()> {
         return Ok(());
     };
 
-    if pid_alive(state.pid) {
-        send_signal(state.pid, "INT")?;
-        wait_for_exit(state.pid, Duration::from_secs(5));
-    }
-
-    if pid_alive(state.pid) {
-        send_signal(state.pid, "TERM")?;
-        wait_for_exit(state.pid, Duration::from_secs(2));
-    }
-
-    if pid_alive(state.pid) {
-        send_signal(state.pid, "KILL")?;
-        wait_for_exit(state.pid, Duration::from_secs(1));
-    }
-
-    let _ = fs::remove_file(&state_path);
-
     if cancel {
+        signal_incremental_cancel(state.incremental.as_ref());
+        stop_recorder(state.pid)?;
+        terminate_incremental_worker(state.incremental.as_ref());
+        let _ = fs::remove_file(&state_path);
         notify(args, "PickScribe", "Recording cancelled");
         cleanup_files(args, &state, None);
+        cleanup_incremental_files(args, state.incremental.as_ref());
         println!("Recording cancelled.");
         return Ok(());
     }
 
+    signal_incremental_stopping(state.incremental.as_ref());
+    if let Err(err) = stop_recorder(state.pid) {
+        signal_incremental_cancel(state.incremental.as_ref());
+        terminate_incremental_worker(state.incremental.as_ref());
+        return Err(err);
+    }
+    signal_incremental_stop(state.incremental.as_ref());
+    let _ = fs::remove_file(&state_path);
+
+    let result = finish_recording(args, &state);
+    if result.is_err() {
+        signal_incremental_cancel(state.incremental.as_ref());
+        terminate_incremental_worker(state.incremental.as_ref());
+    }
+    cleanup_incremental_files(args, state.incremental.as_ref());
+    result
+}
+
+fn finish_recording(args: &Args, state: &RecordingState) -> Result<()> {
     if !state.audio_path.exists() {
         bail!(
             "recording file does not exist: {}",
@@ -290,12 +369,15 @@ fn stop_recording(args: &Args, cancel: bool) -> Result<()> {
     println!("Transcribing {}...", state.audio_path.display());
 
     let transcript_path = transcript_txt_path_for(&state.audio_path);
-    let transcript = transcribe(args, &state.audio_path)?;
+    let transcript = incremental_transcript(state.incremental.as_ref())
+        .map(Ok)
+        .unwrap_or_else(|| transcribe(args, &state.audio_path))?;
     let transcript = cleanup_transcript(&transcript);
 
     if transcript.trim().is_empty() {
         notify(args, "PickScribe", "No speech detected");
-        cleanup_files(args, &state, Some(&transcript_path));
+        cleanup_files(args, state, Some(&transcript_path));
+        cleanup_incremental_files(args, state.incremental.as_ref());
         println!("No speech detected.");
         return Ok(());
     }
@@ -305,7 +387,7 @@ fn stop_recording(args: &Args, cancel: bool) -> Result<()> {
     run_cleanup(args, &transcript)?;
     notify(args, "PickScribe", "Done");
 
-    cleanup_files(args, &state, Some(&transcript_path));
+    cleanup_files(args, state, Some(&transcript_path));
     Ok(())
 }
 
@@ -316,10 +398,580 @@ fn print_status(args: &Args) -> Result<()> {
             println!("pid: {}", state.pid);
             println!("audio: {}", state.audio_path.display());
             println!("started: {}", state.started_unix_secs);
+            if let Some(incremental) = state.incremental.as_ref() {
+                println!("incremental: true");
+                println!("incremental_worker_pid: {}", incremental.pid);
+                if let Ok(Some(output)) = read_incremental_output(&incremental.output_path) {
+                    println!("incremental_segments: {}", output.session.segments.len());
+                    println!("incremental_complete: {}", output.complete);
+                    println!("incremental_fallback: {}", output.fallback_required);
+                }
+            }
         }
         None => println!("idle"),
     }
     Ok(())
+}
+
+fn incremental_enabled(args: &Args) -> bool {
+    args.incremental || env_flag_enabled("PICKSCRIBE_INCREMENTAL_DICTATION")
+}
+
+fn env_flag_enabled(name: &str) -> bool {
+    env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn incremental_config() -> IncrementalConfig {
+    AppConfig::load().incremental
+}
+
+fn start_incremental_worker(args: &Args, dir: &Path, state: &mut RecordingState) -> Result<()> {
+    let session_id = format!("cli-{}-{}", state.started_unix_secs, state.pid);
+    let temp_dir = dir.join("incremental").join(&session_id);
+    ensure_private_dir(&temp_dir)?;
+
+    let worker_state = IncrementalWorkerState {
+        pid: 0,
+        worker_started_ticks: None,
+        session_id: session_id.clone(),
+        temp_dir: temp_dir.clone(),
+        output_path: temp_dir.join("worker-output.json"),
+        stop_path: temp_dir.join("stop"),
+        cancel_path: temp_dir.join("cancel"),
+        log_path: temp_dir.join("worker.log"),
+    };
+    let worker_state_path = temp_dir.join("worker-state.json");
+
+    state.session_id = Some(session_id);
+    state.incremental = Some(worker_state.clone());
+    write_state_file(&worker_state_path, state)?;
+
+    let log = File::create(&worker_state.log_path)
+        .with_context(|| format!("failed to create {}", worker_state.log_path.display()))?;
+    let mut cmd = Command::new(env::current_exe().context("failed to locate pickscribe binary")?);
+    cmd.arg("--run-incremental-worker")
+        .arg("--state-dir")
+        .arg(dir)
+        .arg("--incremental-worker-state")
+        .arg(&worker_state_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(log));
+    append_worker_args(&mut cmd, args);
+
+    let mut child = cmd
+        .spawn()
+        .context("failed to start incremental worker process")?;
+    let worker_started_ticks = match process_start_ticks(child.id()) {
+        Some(ticks) => ticks,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("failed to read incremental worker process identity");
+        }
+    };
+    if let Some(incremental) = state.incremental.as_mut() {
+        incremental.pid = child.id();
+        incremental.worker_started_ticks = Some(worker_started_ticks);
+    }
+
+    Ok(())
+}
+
+fn append_worker_args(cmd: &mut Command, args: &Args) {
+    if let Some(model) = args.whisper_model.as_ref() {
+        cmd.arg("--whisper-model").arg(model);
+    }
+    if let Some(language) = args.language.as_deref() {
+        cmd.arg("--language").arg(language);
+    }
+    if let Some(stt_command) = args.stt_command.as_deref() {
+        cmd.arg("--stt-command").arg(stt_command);
+    }
+    if args.keep_audio {
+        cmd.arg("--keep-audio");
+    }
+}
+
+fn run_incremental_worker_command(args: &Args) -> Result<()> {
+    let worker_state_path = match args.incremental_worker_state.as_ref() {
+        Some(path) => path.clone(),
+        None => state_path(args)?,
+    };
+    let state = read_state_file(&worker_state_path)?
+        .context("incremental worker started without recording state")?;
+    let Some(worker) = state.incremental.clone() else {
+        bail!("incremental worker started without worker state");
+    };
+
+    if let Err(err) = run_incremental_worker_loop(args, &state, &worker) {
+        let mut session = RecordingSession::new(worker.session_id.clone());
+        write_incremental_output(
+            &worker.output_path,
+            &mut session,
+            false,
+            true,
+            Some(format!("{err:#}")),
+        )?;
+    }
+    Ok(())
+}
+
+fn run_incremental_worker_loop(
+    args: &Args,
+    state: &RecordingState,
+    worker: &IncrementalWorkerState,
+) -> Result<()> {
+    let mut session = RecordingSession::new(worker.session_id.clone());
+    let mut next_start_ms = 0u64;
+    let mut segment_id = 0u64;
+    let mut fallback_required = false;
+    let mut complete = false;
+
+    let cfg = incremental_config();
+    let target_ms = cfg.target_ms.max(1_000);
+    let max_ms = cfg.max_ms.max(target_ms);
+    let overlap_ms = cfg.overlap_ms.min(target_ms / 2);
+    let backlog_limit_ms = max_ms.saturating_mul(cfg.max_queue.max(1) as u64);
+    let state_file = state_path(args)?;
+    let stopping_path = incremental_stopping_path(worker);
+    let startup_deadline = Instant::now() + Duration::from_secs(30);
+    let mut saw_state_file = state_file.exists();
+
+    write_incremental_output(&worker.output_path, &mut session, false, false, None)?;
+
+    while !worker.cancel_path.exists() {
+        let final_requested = worker.stop_path.exists();
+        let stopping_requested = stopping_path.exists();
+        if state_file.exists() {
+            saw_state_file = true;
+        }
+        if !final_requested
+            && !stopping_requested
+            && (saw_state_file || Instant::now() >= startup_deadline)
+            && (!state_file.exists() || !pid_alive(state.pid))
+        {
+            cleanup_incremental_files(args, Some(worker));
+            return Ok(());
+        }
+        let available_ms = growing_audio_duration_ms(&state.audio_path).unwrap_or(0);
+        if available_ms <= next_start_ms.saturating_add(250) {
+            if final_requested {
+                if available_ms > next_start_ms {
+                    fallback_required = true;
+                } else {
+                    complete = true;
+                }
+                break;
+            }
+            thread::sleep(Duration::from_millis(250));
+            continue;
+        }
+
+        let buffered_ms = available_ms.saturating_sub(next_start_ms);
+        if !final_requested && buffered_ms < target_ms {
+            thread::sleep(Duration::from_millis(250));
+            continue;
+        }
+        if !final_requested && buffered_ms > backlog_limit_ms {
+            fallback_required = true;
+            write_incremental_output(&worker.output_path, &mut session, false, true, None)?;
+            break;
+        }
+        if final_requested && buffered_ms > max_ms {
+            fallback_required = true;
+            write_incremental_output(&worker.output_path, &mut session, false, true, None)?;
+            break;
+        }
+
+        let desired_end_ms = if final_requested {
+            next_start_ms.saturating_add(max_ms).min(available_ms)
+        } else {
+            next_start_ms.saturating_add(target_ms).min(available_ms)
+        };
+        let end_ms = choose_segment_end(
+            &state.audio_path,
+            next_start_ms,
+            desired_end_ms,
+            available_ms,
+            final_requested,
+        );
+        if end_ms <= next_start_ms {
+            if final_requested {
+                fallback_required = available_ms > next_start_ms;
+                complete = !fallback_required;
+                break;
+            }
+            thread::sleep(Duration::from_millis(250));
+            continue;
+        }
+
+        segment_id = segment_id.saturating_add(1);
+        let slice_start_ms = next_start_ms.saturating_sub(overlap_ms);
+        let segment_path = worker.temp_dir.join(format!("segment-{segment_id:04}.wav"));
+        let slice = match audio_segments::slice_wav(
+            &state.audio_path,
+            &segment_path,
+            slice_start_ms,
+            end_ms,
+        ) {
+            Ok(slice) if slice.sample_count > 0 => slice,
+            Ok(_) if final_requested => {
+                fallback_required = available_ms > next_start_ms;
+                complete = !fallback_required;
+                break;
+            }
+            Ok(_) => {
+                thread::sleep(Duration::from_millis(250));
+                continue;
+            }
+            Err(err) if final_requested => {
+                fallback_required = true;
+                session.upsert_segment(TranscriptSegment::failed(
+                    segment_id,
+                    slice_start_ms,
+                    end_ms,
+                    format!("{err:#}"),
+                ));
+                write_incremental_output(&worker.output_path, &mut session, false, true, None)?;
+                break;
+            }
+            Err(_) => {
+                thread::sleep(Duration::from_millis(250));
+                continue;
+            }
+        };
+
+        session.upsert_segment(TranscriptSegment {
+            id: segment_id,
+            start_ms: slice.start_ms,
+            end_ms: slice.end_ms,
+            status: TranscriptSegmentStatus::Transcribing,
+            raw_text: String::new(),
+            cleaned_text: None,
+            error: None,
+        });
+        write_incremental_output(&worker.output_path, &mut session, false, false, None)?;
+
+        let result = transcribe_incremental_segment(args, &segment_path, || {
+            worker.cancel_path.exists()
+                || (!worker.stop_path.exists()
+                    && !stopping_path.exists()
+                    && (saw_state_file || Instant::now() >= startup_deadline)
+                    && (!state_file.exists() || !pid_alive(state.pid)))
+        })
+        .map(|text| cleanup_transcript(&text));
+        if !args.keep_audio {
+            let _ = fs::remove_file(&segment_path);
+        }
+        if worker.cancel_path.exists() {
+            break;
+        }
+
+        match result {
+            Ok(text) => session.upsert_segment(TranscriptSegment::raw_ready(
+                segment_id,
+                slice.start_ms,
+                slice.end_ms,
+                text,
+            )),
+            Err(err) => {
+                fallback_required = true;
+                session.upsert_segment(TranscriptSegment::failed(
+                    segment_id,
+                    slice.start_ms,
+                    slice.end_ms,
+                    format!("{err:#}"),
+                ));
+            }
+        }
+        write_incremental_output(
+            &worker.output_path,
+            &mut session,
+            false,
+            fallback_required,
+            None,
+        )?;
+        if fallback_required {
+            break;
+        }
+
+        next_start_ms = slice.end_ms;
+        if final_requested && next_start_ms >= available_ms {
+            complete = true;
+            break;
+        }
+    }
+
+    if worker.cancel_path.exists() {
+        return Ok(());
+    }
+
+    write_incremental_output(
+        &worker.output_path,
+        &mut session,
+        complete && !fallback_required,
+        fallback_required,
+        None,
+    )
+}
+
+fn incremental_transcript(worker: Option<&IncrementalWorkerState>) -> Option<String> {
+    let worker = worker?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        match read_incremental_output(&worker.output_path) {
+            Ok(Some(output)) => {
+                if let Some(text) = final_incremental_text(worker, &output) {
+                    wait_then_terminate_incremental_worker(worker);
+                    return Some(text);
+                }
+                if output.fallback_required || output.error.is_some() {
+                    break;
+                }
+            }
+            Ok(None) => {}
+            Err(_) => break,
+        }
+        if worker.pid != 0 && !worker_process_alive(worker) {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    signal_incremental_cancel(Some(worker));
+    terminate_incremental_worker(Some(worker));
+    None
+}
+
+fn final_incremental_text(
+    worker: &IncrementalWorkerState,
+    output: &IncrementalWorkerOutput,
+) -> Option<String> {
+    if output.session.id != worker.session_id || !output.complete || output.fallback_required {
+        return None;
+    }
+    let text = output.session.final_raw_text();
+    (!text.trim().is_empty()).then_some(text)
+}
+
+fn signal_incremental_stop(worker: Option<&IncrementalWorkerState>) {
+    if let Some(worker) = worker {
+        let _ = fs::write(&worker.stop_path, unix_secs().to_string());
+    }
+}
+
+fn signal_incremental_stopping(worker: Option<&IncrementalWorkerState>) {
+    if let Some(worker) = worker {
+        let _ = fs::write(incremental_stopping_path(worker), unix_secs().to_string());
+    }
+}
+
+fn signal_incremental_cancel(worker: Option<&IncrementalWorkerState>) {
+    if let Some(worker) = worker {
+        let _ = fs::write(&worker.cancel_path, unix_secs().to_string());
+    }
+}
+
+fn incremental_stopping_path(worker: &IncrementalWorkerState) -> PathBuf {
+    worker.temp_dir.join("stopping")
+}
+
+fn wait_then_terminate_incremental_worker(worker: &IncrementalWorkerState) {
+    if worker.pid == 0 {
+        return;
+    }
+    wait_for_worker_exit(worker, Duration::from_secs(1));
+    if worker_process_alive(worker) {
+        terminate_incremental_worker(Some(worker));
+    }
+}
+
+fn terminate_incremental_worker(worker: Option<&IncrementalWorkerState>) {
+    let Some(worker) = worker else {
+        return;
+    };
+    if !worker_signal_target_alive(worker) {
+        return;
+    }
+    wait_for_worker_exit(worker, Duration::from_secs(10));
+    if !worker_signal_target_alive(worker) || incremental_worker_output_finished(worker) {
+        return;
+    }
+    let _ = send_signal(worker.pid, "INT");
+    wait_for_worker_exit(worker, Duration::from_secs(1));
+    if worker_signal_target_alive(worker) {
+        let _ = send_signal(worker.pid, "TERM");
+        wait_for_worker_exit(worker, Duration::from_secs(1));
+    }
+    if worker_signal_target_alive(worker) {
+        let _ = send_signal(worker.pid, "KILL");
+        wait_for_worker_exit(worker, Duration::from_secs(1));
+    }
+}
+
+fn worker_process_alive(worker: &IncrementalWorkerState) -> bool {
+    if worker.pid == 0 {
+        return false;
+    }
+
+    match worker.worker_started_ticks {
+        Some(expected) => process_start_ticks(worker.pid) == Some(expected),
+        None => pid_alive(worker.pid),
+    }
+}
+
+fn worker_signal_target_alive(worker: &IncrementalWorkerState) -> bool {
+    if worker.pid == 0 {
+        return false;
+    }
+
+    worker
+        .worker_started_ticks
+        .is_some_and(|expected| process_start_ticks(worker.pid) == Some(expected))
+}
+
+fn wait_for_worker_exit(worker: &IncrementalWorkerState, timeout: Duration) {
+    let start = SystemTime::now();
+    while worker_process_alive(worker) {
+        if start.elapsed().unwrap_or_default() >= timeout {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn incremental_worker_output_finished(worker: &IncrementalWorkerState) -> bool {
+    read_incremental_output(&worker.output_path)
+        .ok()
+        .flatten()
+        .map(|output| output.complete || output.fallback_required || output.error.is_some())
+        .unwrap_or(false)
+}
+
+fn read_incremental_output(path: &Path) -> Result<Option<IncrementalWorkerOutput>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let data =
+        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    serde_json::from_str(&data)
+        .map(Some)
+        .with_context(|| format!("failed to parse {}", path.display()))
+}
+
+fn write_incremental_output(
+    path: &Path,
+    session: &mut RecordingSession,
+    complete: bool,
+    fallback_required: bool,
+    error: Option<String>,
+) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        ensure_private_dir(parent)?;
+    }
+    let output = IncrementalWorkerOutput {
+        session: session.clone(),
+        complete,
+        fallback_required,
+        error,
+        updated_unix_secs: unix_secs(),
+    };
+    let tmp_path = path.with_extension("json.tmp");
+    let data = serde_json::to_string_pretty(&output).context("failed to serialize output")?;
+    fs::write(&tmp_path, data)
+        .with_context(|| format!("failed to write {}", tmp_path.display()))?;
+    fs::rename(&tmp_path, path).with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn atomic_write_private(path: &Path, data: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let filename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("recording.json");
+    let tmp_path = path.with_file_name(format!(".{filename}.{}.tmp", std::process::id()));
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(&tmp_path)
+        .with_context(|| format!("failed to write {}", tmp_path.display()))?;
+    file.write_all(data)
+        .with_context(|| format!("failed to write {}", tmp_path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("failed to flush {}", tmp_path.display()))?;
+    drop(file);
+    fs::set_permissions(&tmp_path, fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("failed to restrict {}", tmp_path.display()))?;
+    fs::rename(&tmp_path, path).with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn cleanup_incremental_files(args: &Args, worker: Option<&IncrementalWorkerState>) {
+    let Some(worker) = worker else {
+        return;
+    };
+    if args.keep_audio {
+        return;
+    }
+    let _ = fs::remove_dir_all(&worker.temp_dir);
+}
+
+fn growing_audio_duration_ms(path: &Path) -> Result<u64> {
+    let bytes = fs::metadata(path)?
+        .len()
+        .saturating_sub(audio_segments::WAV_HEADER_BYTES);
+    let samples = bytes / audio_segments::BYTES_PER_SAMPLE;
+    Ok(samples.saturating_mul(1_000) / audio_segments::SAMPLE_RATE_HZ as u64)
+}
+
+fn choose_segment_end(
+    audio_path: &Path,
+    next_start_ms: u64,
+    desired_end_ms: u64,
+    available_ms: u64,
+    final_requested: bool,
+) -> u64 {
+    if final_requested {
+        return available_ms;
+    }
+
+    let radius_ms = 500;
+    let scan_start_ms = desired_end_ms.saturating_sub(radius_ms).max(next_start_ms);
+    let scan_end_ms = desired_end_ms.saturating_add(radius_ms).min(available_ms);
+    let Ok(samples) = audio_segments::read_samples(audio_path, scan_start_ms, scan_end_ms) else {
+        return desired_end_ms.min(available_ms);
+    };
+    if samples.is_empty() {
+        return desired_end_ms.min(available_ms);
+    }
+
+    let target_sample = ms_to_sample(desired_end_ms.saturating_sub(scan_start_ms));
+    let radius_sample = ms_to_sample(radius_ms).min(samples.len());
+    let boundary_sample =
+        audio_segments::find_low_energy_boundary(&samples, target_sample, radius_sample);
+    let boundary_ms = scan_start_ms.saturating_add(sample_to_ms(boundary_sample as u64));
+    boundary_ms.clamp(next_start_ms.saturating_add(250), available_ms)
+}
+
+fn ms_to_sample(ms: u64) -> usize {
+    (ms.saturating_mul(audio_segments::SAMPLE_RATE_HZ as u64) / 1_000) as usize
+}
+
+fn sample_to_ms(sample: u64) -> u64 {
+    sample.saturating_mul(1_000) / audio_segments::SAMPLE_RATE_HZ as u64
 }
 
 fn transcribe(args: &Args, audio_path: &Path) -> Result<String> {
@@ -403,6 +1055,197 @@ fn transcribe(args: &Args, audio_path: &Path) -> Result<String> {
     } else {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
+}
+
+fn transcribe_incremental_segment(
+    args: &Args,
+    audio_path: &Path,
+    is_cancelled: impl Fn() -> bool,
+) -> Result<String> {
+    let output_prefix = transcript_prefix_for(audio_path);
+
+    if let Some(custom) = args
+        .stt_command
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        let model = args
+            .whisper_model
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default();
+        let command = custom
+            .replace("{audio}", &shell_escape(&audio_path.display().to_string()))
+            .replace("{model}", &shell_escape(&model))
+            .replace(
+                "{output}",
+                &shell_escape(&output_prefix.display().to_string()),
+            );
+        let stdout_path = output_prefix.with_extension("transcript.stdout.log");
+        let stderr_path = output_prefix.with_extension("transcript.stderr.log");
+        let stdout_file = File::create(&stdout_path)
+            .with_context(|| format!("failed to create {}", stdout_path.display()))?;
+        let stderr_file = File::create(&stderr_path)
+            .with_context(|| format!("failed to create {}", stderr_path.display()))?;
+        let (mut cmd, process_group) = cancellable_shell_command();
+        cmd.arg("-lc")
+            .arg(&command)
+            .stdout(Stdio::from(stdout_file))
+            .stderr(Stdio::from(stderr_file));
+        let mut child = cmd
+            .spawn()
+            .with_context(|| format!("failed to run custom STT command: {command}"))?;
+        let status = match wait_for_cancellable_child(&mut child, process_group, is_cancelled) {
+            Ok(status) => status,
+            Err(err) => {
+                cleanup_segment_transcript_files(audio_path);
+                return Err(err);
+            }
+        };
+        if !status.success() {
+            let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+            cleanup_segment_transcript_files(audio_path);
+            bail!(
+                "custom STT command failed with {}:\n{}",
+                status,
+                stderr.trim()
+            );
+        }
+
+        let txt_path = transcript_txt_path_for(audio_path);
+        let output = if txt_path.exists() {
+            fs::read_to_string(&txt_path)
+                .with_context(|| format!("failed to read {}", txt_path.display()))?
+        } else {
+            fs::read_to_string(&stdout_path)
+                .with_context(|| format!("failed to read {}", stdout_path.display()))?
+        };
+        let _ = fs::remove_file(&stdout_path);
+        let _ = fs::remove_file(&stderr_path);
+        return Ok(output);
+    }
+
+    let whisper = resolve_whisper_command(args)?;
+    let stderr_path = output_prefix.with_extension("transcript.stderr.log");
+    let stderr_file = File::create(&stderr_path)
+        .with_context(|| format!("failed to create {}", stderr_path.display()))?;
+    let (mut cmd, process_group) = cancellable_program_command(&whisper.program);
+
+    if let Some(model) = whisper.model.as_ref() {
+        cmd.arg("--model").arg(model);
+    }
+
+    cmd.arg("--file")
+        .arg(audio_path)
+        .arg("--output-txt")
+        .arg("--output-file")
+        .arg(&output_prefix)
+        .arg("--no-prints");
+
+    if let Some(language) = args.language.as_deref().filter(|value| !value.is_empty()) {
+        cmd.arg("--language").arg(language);
+    }
+
+    cmd.stdout(Stdio::null()).stderr(Stdio::from(stderr_file));
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("failed to run `{}`", whisper.program.display()))?;
+    let status = match wait_for_cancellable_child(&mut child, process_group, is_cancelled) {
+        Ok(status) => status,
+        Err(err) => {
+            cleanup_segment_transcript_files(audio_path);
+            return Err(err);
+        }
+    };
+    if !status.success() {
+        let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+        cleanup_segment_transcript_files(audio_path);
+        bail!("whisper.cpp failed with {}:\n{}", status, stderr.trim());
+    }
+
+    let _ = fs::remove_file(&stderr_path);
+    let txt_path = transcript_txt_path_for(audio_path);
+    if txt_path.exists() {
+        fs::read_to_string(&txt_path)
+            .with_context(|| format!("failed to read {}", txt_path.display()))
+    } else {
+        Ok(String::new())
+    }
+}
+
+fn cancellable_shell_command() -> (Command, bool) {
+    if let Some(setsid) = find_command("setsid") {
+        let mut cmd = Command::new(setsid);
+        cmd.arg("sh");
+        (cmd, true)
+    } else {
+        (Command::new("sh"), false)
+    }
+}
+
+fn cancellable_program_command(program: &Path) -> (Command, bool) {
+    if let Some(setsid) = find_command("setsid") {
+        let mut cmd = Command::new(setsid);
+        cmd.arg(program);
+        (cmd, true)
+    } else {
+        (Command::new(program), false)
+    }
+}
+
+fn wait_for_cancellable_child(
+    child: &mut Child,
+    process_group: bool,
+    is_cancelled: impl Fn() -> bool,
+) -> Result<ExitStatus> {
+    loop {
+        if is_cancelled() {
+            terminate_child(child, process_group);
+            bail!("transcription cancelled");
+        }
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn terminate_child(child: &mut Child, process_group: bool) {
+    let pid = child.id();
+    if process_group {
+        let _ = send_process_group_signal(pid, "INT");
+        wait_for_exit(pid, Duration::from_secs(1));
+        if pid_alive(pid) {
+            let _ = send_process_group_signal(pid, "TERM");
+            wait_for_exit(pid, Duration::from_secs(1));
+        }
+        if pid_alive(pid) {
+            let _ = send_process_group_signal(pid, "KILL");
+        }
+    } else {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+}
+
+fn send_process_group_signal(pid: u32, signal: &str) -> Result<()> {
+    let status = Command::new("kill")
+        .arg(format!("-{signal}"))
+        .arg(format!("-{pid}"))
+        .status()
+        .with_context(|| format!("failed to send SIG{signal} to process group {pid}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        bail!("kill -{signal} -{pid} exited with {status}");
+    }
+}
+
+fn cleanup_segment_transcript_files(audio_path: &Path) {
+    let prefix = transcript_prefix_for(audio_path);
+    let _ = fs::remove_file(transcript_txt_path_for(audio_path));
+    let _ = fs::remove_file(prefix.with_extension("transcript.stdout.log"));
+    let _ = fs::remove_file(prefix.with_extension("transcript.stderr.log"));
 }
 
 #[derive(Debug)]
@@ -1017,6 +1860,29 @@ fn state_dir(args: &Args) -> Result<PathBuf> {
     Ok(PathBuf::from(format!("/tmp/pickscribe-{user}")))
 }
 
+fn prepare_state_dir(args: &Args, path: &Path) -> Result<()> {
+    if args.state_dir.is_some() {
+        fs::create_dir_all(path).with_context(|| format!("failed to create {}", path.display()))
+    } else {
+        ensure_private_dir(path)
+    }
+}
+
+fn ensure_private_dir(path: &Path) -> Result<()> {
+    fs::create_dir_all(path).with_context(|| format!("failed to create {}", path.display()))?;
+    let mut permissions = fs::metadata(path)
+        .with_context(|| format!("failed to stat {}", path.display()))?
+        .permissions();
+    let mode = permissions.mode();
+    let private_mode = mode & !0o077;
+    if private_mode != mode {
+        permissions.set_mode(private_mode);
+        fs::set_permissions(path, permissions)
+            .with_context(|| format!("failed to restrict {}", path.display()))?;
+    }
+    Ok(())
+}
+
 fn state_path(args: &Args) -> Result<PathBuf> {
     Ok(state_dir(args)?.join("recording.json"))
 }
@@ -1037,6 +1903,9 @@ fn read_active_state(args: &Args) -> Result<Option<RecordingState>> {
     if pid_alive(state.pid) {
         Ok(Some(state))
     } else {
+        signal_incremental_cancel(state.incremental.as_ref());
+        terminate_incremental_worker(state.incremental.as_ref());
+        cleanup_incremental_files(args, state.incremental.as_ref());
         let _ = fs::remove_file(path);
         Ok(None)
     }
@@ -1055,8 +1924,12 @@ fn read_state_file(path: &Path) -> Result<Option<RecordingState>> {
 
 fn write_state(args: &Args, state: &RecordingState) -> Result<()> {
     let path = state_path(args)?;
+    write_state_file(&path, state)
+}
+
+fn write_state_file(path: &Path, state: &RecordingState) -> Result<()> {
     let data = serde_json::to_string_pretty(state).context("failed to serialize state")?;
-    fs::write(&path, data).with_context(|| format!("failed to write {}", path.display()))
+    atomic_write_private(path, data.as_bytes())
 }
 
 fn unix_secs() -> u64 {
@@ -1070,6 +1943,16 @@ fn pid_alive(pid: u32) -> bool {
     Path::new("/proc").join(pid.to_string()).exists()
 }
 
+fn process_start_ticks(pid: u32) -> Option<u64> {
+    let stat = fs::read_to_string(Path::new("/proc").join(pid.to_string()).join("stat")).ok()?;
+    parse_process_start_ticks(&stat)
+}
+
+fn parse_process_start_ticks(stat: &str) -> Option<u64> {
+    let rest = stat.rsplit_once(") ")?.1;
+    rest.split_whitespace().nth(19)?.parse().ok()
+}
+
 fn send_signal(pid: u32, signal: &str) -> Result<()> {
     let status = Command::new("kill")
         .arg(format!("-{signal}"))
@@ -1081,6 +1964,25 @@ fn send_signal(pid: u32, signal: &str) -> Result<()> {
     } else {
         bail!("kill -{signal} {pid} exited with {status}");
     }
+}
+
+fn stop_recorder(pid: u32) -> Result<()> {
+    if pid_alive(pid) {
+        send_signal(pid, "INT")?;
+        wait_for_exit(pid, Duration::from_secs(5));
+    }
+
+    if pid_alive(pid) {
+        send_signal(pid, "TERM")?;
+        wait_for_exit(pid, Duration::from_secs(2));
+    }
+
+    if pid_alive(pid) {
+        send_signal(pid, "KILL")?;
+        wait_for_exit(pid, Duration::from_secs(1));
+    }
+
+    Ok(())
 }
 
 fn wait_for_exit(pid: u32, timeout: Duration) {
@@ -1142,6 +2044,20 @@ fn shell_escape(value: &str) -> String {
 mod tests {
     use super::*;
 
+    fn worker_state(session_id: &str) -> IncrementalWorkerState {
+        let temp_dir = PathBuf::from("/tmp/pickscribe-test").join(session_id);
+        IncrementalWorkerState {
+            pid: 0,
+            worker_started_ticks: None,
+            session_id: session_id.to_string(),
+            output_path: temp_dir.join("worker-output.json"),
+            stop_path: temp_dir.join("stop"),
+            cancel_path: temp_dir.join("cancel"),
+            log_path: temp_dir.join("worker.log"),
+            temp_dir,
+        }
+    }
+
     #[test]
     fn cleanup_transcript_strips_whisper_timestamps_and_markers() {
         let transcript = "
@@ -1151,10 +2067,7 @@ mod tests {
             (music)
         ";
 
-        assert_eq!(
-            cleanup_transcript(transcript),
-            "hello there general kenobi"
-        );
+        assert_eq!(cleanup_transcript(transcript), "hello there general kenobi");
     }
 
     #[test]
@@ -1162,5 +2075,73 @@ mod tests {
         let transcript = " first line\n\nsecond line \n[inaudible]\n";
 
         assert_eq!(cleanup_transcript(transcript), "first line second line");
+    }
+
+    #[test]
+    fn recording_state_deserializes_legacy_state_files() {
+        let state: RecordingState = serde_json::from_str(
+            r#"{
+                "pid": 123,
+                "audio_path": "/tmp/recording.wav",
+                "log_path": "/tmp/recording.log",
+                "started_unix_secs": 456
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(state.pid, 123);
+        assert!(state.session_id.is_none());
+        assert!(state.incremental.is_none());
+    }
+
+    #[test]
+    fn process_start_ticks_parser_handles_spaced_command_names() {
+        let fields = (3..=52)
+            .map(|field| {
+                if field == 22 {
+                    "98765".to_owned()
+                } else {
+                    "0".to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let stat = format!("123 (pickscribe worker) {fields}");
+
+        assert_eq!(parse_process_start_ticks(&stat), Some(98_765));
+    }
+
+    #[test]
+    fn final_incremental_text_requires_complete_current_nonfallback_output() {
+        let worker = worker_state("session-1");
+        let mut session = RecordingSession::new("session-1");
+        session.upsert_segment(TranscriptSegment::raw_ready(1, 0, 5_000, "hello world"));
+        session.upsert_segment(TranscriptSegment::raw_ready(2, 4_000, 9_000, "world again"));
+        let output = IncrementalWorkerOutput {
+            session: session.clone(),
+            complete: true,
+            fallback_required: false,
+            error: None,
+            updated_unix_secs: 1,
+        };
+
+        assert_eq!(
+            final_incremental_text(&worker, &output).as_deref(),
+            Some("hello world again")
+        );
+
+        let mut incomplete = output.clone();
+        incomplete.complete = false;
+        assert!(final_incremental_text(&worker, &incomplete).is_none());
+
+        let mut fallback = output.clone();
+        fallback.fallback_required = true;
+        assert!(final_incremental_text(&worker, &fallback).is_none());
+
+        let stale = IncrementalWorkerOutput {
+            session: RecordingSession::new("session-2"),
+            ..output
+        };
+        assert!(final_incremental_text(&worker, &stale).is_none());
     }
 }
