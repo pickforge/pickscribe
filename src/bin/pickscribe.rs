@@ -117,6 +117,9 @@ struct Args {
 
     #[arg(long, hide = true)]
     run_incremental_worker: bool,
+
+    #[arg(long, hide = true)]
+    incremental_worker_state: Option<PathBuf>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -157,6 +160,8 @@ struct RecordingState {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct IncrementalWorkerState {
     pid: u32,
+    #[serde(default)]
+    worker_started_ticks: Option<u64>,
     session_id: String,
     temp_dir: PathBuf,
     output_path: PathBuf,
@@ -285,7 +290,14 @@ fn start_recording(args: &Args) -> Result<()> {
         }
     }
 
-    write_state(args, &state)?;
+    if let Err(err) = write_state(args, &state) {
+        signal_incremental_cancel(state.incremental.as_ref());
+        stop_recorder(state.pid)?;
+        terminate_incremental_worker(state.incremental.as_ref());
+        cleanup_files(args, &state, None);
+        cleanup_incremental_files(args, state.incremental.as_ref());
+        return Err(err);
+    }
     notify(
         args,
         "PickScribe",
@@ -315,8 +327,13 @@ fn stop_recording(args: &Args, cancel: bool) -> Result<()> {
         return Ok(());
     }
 
+    signal_incremental_stopping(state.incremental.as_ref());
+    if let Err(err) = stop_recorder(state.pid) {
+        signal_incremental_cancel(state.incremental.as_ref());
+        terminate_incremental_worker(state.incremental.as_ref());
+        return Err(err);
+    }
     signal_incremental_stop(state.incremental.as_ref());
-    stop_recorder(state.pid)?;
     let _ = fs::remove_file(&state_path);
 
     let result = finish_recording(args, &state);
@@ -423,6 +440,7 @@ fn start_incremental_worker(args: &Args, dir: &Path, state: &mut RecordingState)
 
     let worker_state = IncrementalWorkerState {
         pid: 0,
+        worker_started_ticks: None,
         session_id: session_id.clone(),
         temp_dir: temp_dir.clone(),
         output_path: temp_dir.join("worker-output.json"),
@@ -430,10 +448,11 @@ fn start_incremental_worker(args: &Args, dir: &Path, state: &mut RecordingState)
         cancel_path: temp_dir.join("cancel"),
         log_path: temp_dir.join("worker.log"),
     };
+    let worker_state_path = temp_dir.join("worker-state.json");
 
     state.session_id = Some(session_id);
     state.incremental = Some(worker_state.clone());
-    write_state(args, state)?;
+    write_state_file(&worker_state_path, state)?;
 
     let log = File::create(&worker_state.log_path)
         .with_context(|| format!("failed to create {}", worker_state.log_path.display()))?;
@@ -441,6 +460,8 @@ fn start_incremental_worker(args: &Args, dir: &Path, state: &mut RecordingState)
     cmd.arg("--run-incremental-worker")
         .arg("--state-dir")
         .arg(dir)
+        .arg("--incremental-worker-state")
+        .arg(&worker_state_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::from(log));
@@ -449,13 +470,17 @@ fn start_incremental_worker(args: &Args, dir: &Path, state: &mut RecordingState)
     let mut child = cmd
         .spawn()
         .context("failed to start incremental worker process")?;
+    let worker_started_ticks = match process_start_ticks(child.id()) {
+        Some(ticks) => ticks,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("failed to read incremental worker process identity");
+        }
+    };
     if let Some(incremental) = state.incremental.as_mut() {
         incremental.pid = child.id();
-    }
-    if let Err(err) = write_state(args, state) {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(err);
+        incremental.worker_started_ticks = Some(worker_started_ticks);
     }
 
     Ok(())
@@ -477,7 +502,11 @@ fn append_worker_args(cmd: &mut Command, args: &Args) {
 }
 
 fn run_incremental_worker_command(args: &Args) -> Result<()> {
-    let state = read_state_file(&state_path(args)?)?
+    let worker_state_path = match args.incremental_worker_state.as_ref() {
+        Some(path) => path.clone(),
+        None => state_path(args)?,
+    };
+    let state = read_state_file(&worker_state_path)?
         .context("incremental worker started without recording state")?;
     let Some(worker) = state.incremental.clone() else {
         bail!("incremental worker started without worker state");
@@ -513,12 +542,23 @@ fn run_incremental_worker_loop(
     let overlap_ms = cfg.overlap_ms.min(target_ms / 2);
     let backlog_limit_ms = max_ms.saturating_mul(cfg.max_queue.max(1) as u64);
     let state_file = state_path(args)?;
+    let stopping_path = incremental_stopping_path(worker);
+    let startup_deadline = Instant::now() + Duration::from_secs(30);
+    let mut saw_state_file = state_file.exists();
 
     write_incremental_output(&worker.output_path, &mut session, false, false, None)?;
 
     while !worker.cancel_path.exists() {
         let final_requested = worker.stop_path.exists();
-        if !final_requested && (!state_file.exists() || !pid_alive(state.pid)) {
+        let stopping_requested = stopping_path.exists();
+        if state_file.exists() {
+            saw_state_file = true;
+        }
+        if !final_requested
+            && !stopping_requested
+            && (saw_state_file || Instant::now() >= startup_deadline)
+            && (!state_file.exists() || !pid_alive(state.pid))
+        {
             cleanup_incremental_files(args, Some(worker));
             return Ok(());
         }
@@ -623,7 +663,10 @@ fn run_incremental_worker_loop(
 
         let result = transcribe_incremental_segment(args, &segment_path, || {
             worker.cancel_path.exists()
-                || (!worker.stop_path.exists() && (!state_file.exists() || !pid_alive(state.pid)))
+                || (!worker.stop_path.exists()
+                    && !stopping_path.exists()
+                    && (saw_state_file || Instant::now() >= startup_deadline)
+                    && (!state_file.exists() || !pid_alive(state.pid)))
         })
         .map(|text| cleanup_transcript(&text));
         if !args.keep_audio {
@@ -698,7 +741,7 @@ fn incremental_transcript(worker: Option<&IncrementalWorkerState>) -> Option<Str
             Ok(None) => {}
             Err(_) => break,
         }
-        if worker.pid != 0 && !pid_alive(worker.pid) {
+        if worker.pid != 0 && !worker_process_alive(worker) {
             break;
         }
         thread::sleep(Duration::from_millis(100));
@@ -726,18 +769,28 @@ fn signal_incremental_stop(worker: Option<&IncrementalWorkerState>) {
     }
 }
 
+fn signal_incremental_stopping(worker: Option<&IncrementalWorkerState>) {
+    if let Some(worker) = worker {
+        let _ = fs::write(incremental_stopping_path(worker), unix_secs().to_string());
+    }
+}
+
 fn signal_incremental_cancel(worker: Option<&IncrementalWorkerState>) {
     if let Some(worker) = worker {
         let _ = fs::write(&worker.cancel_path, unix_secs().to_string());
     }
 }
 
+fn incremental_stopping_path(worker: &IncrementalWorkerState) -> PathBuf {
+    worker.temp_dir.join("stopping")
+}
+
 fn wait_then_terminate_incremental_worker(worker: &IncrementalWorkerState) {
     if worker.pid == 0 {
         return;
     }
-    wait_for_exit(worker.pid, Duration::from_secs(1));
-    if pid_alive(worker.pid) {
+    wait_for_worker_exit(worker, Duration::from_secs(1));
+    if worker_process_alive(worker) {
         terminate_incremental_worker(Some(worker));
     }
 }
@@ -746,23 +799,62 @@ fn terminate_incremental_worker(worker: Option<&IncrementalWorkerState>) {
     let Some(worker) = worker else {
         return;
     };
-    if worker.pid == 0 || !pid_alive(worker.pid) {
+    if !worker_signal_target_alive(worker) {
         return;
     }
-    wait_for_exit(worker.pid, Duration::from_secs(1));
-    if !pid_alive(worker.pid) {
+    wait_for_worker_exit(worker, Duration::from_secs(10));
+    if !worker_signal_target_alive(worker) || incremental_worker_output_finished(worker) {
         return;
     }
     let _ = send_signal(worker.pid, "INT");
-    wait_for_exit(worker.pid, Duration::from_secs(1));
-    if pid_alive(worker.pid) {
+    wait_for_worker_exit(worker, Duration::from_secs(1));
+    if worker_signal_target_alive(worker) {
         let _ = send_signal(worker.pid, "TERM");
-        wait_for_exit(worker.pid, Duration::from_secs(1));
+        wait_for_worker_exit(worker, Duration::from_secs(1));
     }
-    if pid_alive(worker.pid) {
+    if worker_signal_target_alive(worker) {
         let _ = send_signal(worker.pid, "KILL");
-        wait_for_exit(worker.pid, Duration::from_secs(1));
+        wait_for_worker_exit(worker, Duration::from_secs(1));
     }
+}
+
+fn worker_process_alive(worker: &IncrementalWorkerState) -> bool {
+    if worker.pid == 0 {
+        return false;
+    }
+
+    match worker.worker_started_ticks {
+        Some(expected) => process_start_ticks(worker.pid) == Some(expected),
+        None => pid_alive(worker.pid),
+    }
+}
+
+fn worker_signal_target_alive(worker: &IncrementalWorkerState) -> bool {
+    if worker.pid == 0 {
+        return false;
+    }
+
+    worker
+        .worker_started_ticks
+        .is_some_and(|expected| process_start_ticks(worker.pid) == Some(expected))
+}
+
+fn wait_for_worker_exit(worker: &IncrementalWorkerState, timeout: Duration) {
+    let start = SystemTime::now();
+    while worker_process_alive(worker) {
+        if start.elapsed().unwrap_or_default() >= timeout {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn incremental_worker_output_finished(worker: &IncrementalWorkerState) -> bool {
+    read_incremental_output(&worker.output_path)
+        .ok()
+        .flatten()
+        .map(|output| output.complete || output.fallback_required || output.error.is_some())
+        .unwrap_or(false)
 }
 
 fn read_incremental_output(path: &Path) -> Result<Option<IncrementalWorkerOutput>> {
@@ -1832,8 +1924,12 @@ fn read_state_file(path: &Path) -> Result<Option<RecordingState>> {
 
 fn write_state(args: &Args, state: &RecordingState) -> Result<()> {
     let path = state_path(args)?;
+    write_state_file(&path, state)
+}
+
+fn write_state_file(path: &Path, state: &RecordingState) -> Result<()> {
     let data = serde_json::to_string_pretty(state).context("failed to serialize state")?;
-    atomic_write_private(&path, data.as_bytes())
+    atomic_write_private(path, data.as_bytes())
 }
 
 fn unix_secs() -> u64 {
@@ -1845,6 +1941,16 @@ fn unix_secs() -> u64 {
 
 fn pid_alive(pid: u32) -> bool {
     Path::new("/proc").join(pid.to_string()).exists()
+}
+
+fn process_start_ticks(pid: u32) -> Option<u64> {
+    let stat = fs::read_to_string(Path::new("/proc").join(pid.to_string()).join("stat")).ok()?;
+    parse_process_start_ticks(&stat)
+}
+
+fn parse_process_start_ticks(stat: &str) -> Option<u64> {
+    let rest = stat.rsplit_once(") ")?.1;
+    rest.split_whitespace().nth(19)?.parse().ok()
 }
 
 fn send_signal(pid: u32, signal: &str) -> Result<()> {
@@ -1942,6 +2048,7 @@ mod tests {
         let temp_dir = PathBuf::from("/tmp/pickscribe-test").join(session_id);
         IncrementalWorkerState {
             pid: 0,
+            worker_started_ticks: None,
             session_id: session_id.to_string(),
             output_path: temp_dir.join("worker-output.json"),
             stop_path: temp_dir.join("stop"),
@@ -1985,6 +2092,23 @@ mod tests {
         assert_eq!(state.pid, 123);
         assert!(state.session_id.is_none());
         assert!(state.incremental.is_none());
+    }
+
+    #[test]
+    fn process_start_ticks_parser_handles_spaced_command_names() {
+        let fields = (3..=52)
+            .map(|field| {
+                if field == 22 {
+                    "98765".to_owned()
+                } else {
+                    "0".to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let stat = format!("123 (pickscribe worker) {fields}");
+
+        assert_eq!(parse_process_start_ticks(&stat), Some(98_765));
     }
 
     #[test]
