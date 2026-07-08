@@ -1,4 +1,5 @@
 @import "@pickforge/brand/compat-unprefixed.css";
+@import "@pickforge/brand/chrome.css";
 
 html,
 body {
@@ -56,6 +57,10 @@ p {
 /* Numbered section eyebrows — the "§ 01 · Section" Pickforge standard. */
 .eyebrow.ember {
   color: var(--ember);
+}
+
+.eyebrow.ember .pf-eyebrow-tick {
+  border-color: var(--ember);
 }
 
 .card {
@@ -185,18 +190,7 @@ p {
   color: #be123c;
 }
 
-.dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: currentColor;
-  flex: none;
-}
-
-.dot.pulse {
-  animation: ember-pulse 2.4s var(--ease-forge) infinite;
-}
-
+/* ember-pulse remains for the floating capsule status dot (Float.svelte). */
 @keyframes ember-pulse {
   0% {
     box-shadow: 0 0 0 0 color-mix(in srgb, var(--ember) 55%, transparent);

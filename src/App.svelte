@@ -13,6 +13,8 @@
     EVENT_STATE,
     type StatePayload,
   } from "./lib/api";
+  import ResizeHandles from "./lib/components/ResizeHandles.svelte";
+  import Titlebar from "./lib/components/Titlebar.svelte";
   import Dashboard from "./lib/views/Dashboard.svelte";
   import History from "./lib/views/History.svelte";
   import Settings from "./lib/views/Settings.svelte";
@@ -135,18 +137,8 @@
 </script>
 
 <div class="app bg-blueprint">
-  <header class="chrome">
-    <div class="chrome-dots" aria-hidden="true">
-      <span></span>
-      <span></span>
-      <span></span>
-    </div>
-    <span class="chrome-title">Pickscribe · Dictation</span>
-    <span class="pill" class:ember={active}>
-      <span class="dot" class:pulse={active}></span>
-      {dictation.stage}
-    </span>
-  </header>
+  <ResizeHandles />
+  <Titlebar stage={dictation.stage} {active} />
 
   <div class="body">
     <aside class="sidebar">
@@ -160,7 +152,7 @@
             onclick={() => navigate(item.id)}
           >
             {#if item.id === "settings" && settingsDirty}
-              <span class="dirty-dot" title="Unsaved changes"></span>
+              <span class="dirty-tick" title="Unsaved changes"></span>
             {/if}
             <item.icon size={17} weight={view === item.id ? "fill" : "regular"} />
             {item.label}
@@ -183,11 +175,11 @@
     </main>
   </div>
 
-  <footer class="footer">
-    <span class="status" class:error={Boolean(dictation.error)}>
+  <footer class="pf-statusbar">
+    <span class="pf-statusbar-item" class:error={Boolean(dictation.error)}>
       {dictation.error ?? dictation.message ?? "Local-first dictation"}
     </span>
-    <span class="brand-line">© Pickforge · pickforge.dev · MIT</span>
+    <span class="pf-statusbar-right">© Pickforge · pickforge.dev · MIT</span>
   </footer>
 </div>
 
@@ -224,38 +216,6 @@
     flex-direction: column;
     height: 100vh;
     background-color: var(--surface);
-  }
-
-  .chrome {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    flex: none;
-    height: 44px;
-    padding: 0 16px;
-    border-bottom: 1px solid var(--hairline);
-    background: color-mix(in srgb, var(--surface) 75%, transparent);
-  }
-
-  .chrome-dots {
-    display: flex;
-    gap: 6px;
-  }
-
-  .chrome-dots span {
-    width: 6px;
-    height: 6px;
-    border-radius: var(--radius-pill);
-    background: color-mix(in srgb, var(--text) 15%, transparent);
-  }
-
-  .chrome-title {
-    flex: 1;
-    font-family: var(--font-mono);
-    font-size: 11px;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: var(--muted);
   }
 
   .body {
@@ -321,14 +281,14 @@
     outline-offset: -2px;
   }
 
-  .dirty-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: var(--radius-pill);
-    background: var(--ember);
+  .dirty-tick {
+    width: 4px;
+    height: 9px;
+    border: var(--pf-bracket-width) solid var(--ember);
+    border-right: none;
+    border-radius: 2px 0 0 2px;
     flex: none;
-    margin-left: -4px;
-    animation: ember-pulse 2.4s var(--ease-forge) infinite;
+    margin-left: -2px;
   }
 
   .dialog-backdrop {
@@ -391,39 +351,12 @@
     flex: 1;
     min-width: 0;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 24px 28px 32px;
   }
 
-  .footer {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    flex: none;
-    height: 34px;
-    padding: 0 16px;
-    border-top: 1px solid var(--hairline);
-    background: color-mix(in srgb, var(--surface) 75%, transparent);
-  }
-
-  .status {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 12px;
-    color: var(--muted);
-  }
-
-  .status.error {
+  .pf-statusbar-item.error {
     color: var(--bad);
-  }
-
-  .brand-line {
-    flex: none;
-    font-family: var(--font-mono);
-    font-size: 10px;
-    letter-spacing: 0.12em;
-    color: var(--muted);
   }
 
   @media (max-width: 700px) {

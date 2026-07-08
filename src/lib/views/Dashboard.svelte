@@ -110,7 +110,7 @@
 <section class="dashboard">
   <header class="head fade-up">
     <div>
-      <p class="eyebrow ember">§ 01 · Dictation</p>
+      <p class="eyebrow ember pf-eyebrow-row"><span class="pf-eyebrow-tick"></span>§ 01 · Dictation</p>
       <h2>
         {#if platformBlocked}Linux release target only{:else if dictation.stage === "idle"}Press the orb or your hotkey{:else}{stageLabel}…{/if}
       </h2>
@@ -119,8 +119,12 @@
       {#if localOnly}
         <span class="pill ok">LOCAL-ONLY</span>
       {/if}
-      <span class="pill" class:ember={dictation.stage !== "idle"}>
-        {#if dictation.stage !== "idle"}<span class="dot pulse"></span>{/if}
+      <span class="pf-pill">
+        <span
+          class="pf-dot"
+          class:pf-dot--pulsing={dictation.stage !== "idle"}
+          style={`--pf-intent: ${dictation.stage !== "idle" ? "var(--pf-ember)" : "var(--pf-text-med)"}`}
+        ></span>
         {stageLabel}
       </span>
     </div>
@@ -595,7 +599,7 @@
     line-height: 1.6;
     color: color-mix(in srgb, var(--text) 90%, transparent);
     max-height: 130px;
-    overflow-y: auto;
+    overflow: hidden auto;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }

@@ -5,7 +5,7 @@
     "": {
       "name": "pickscribe-app",
       "dependencies": {
-        "@pickforge/brand": "0.1.1",
+        "@pickforge/brand": "0.2.0",
         "@tauri-apps/api": "^2.9.0",
         "@tauri-apps/plugin-autostart": "^2.5.0",
         "@tauri-apps/plugin-opener": "^2.5.0",
@@ -103,7 +103,7 @@
 
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.31", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.1.0", "@jridgewell/sourcemap-codec": "^1.4.14" } }, "sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw=="],
 
-    "@pickforge/brand": ["@pickforge/brand@0.1.1", "", { "dependencies": { "@fontsource/geist-mono": "^5.2.8", "@fontsource/geist-sans": "^5.2.5" } }, "sha512-XwXL8ymweX+2jSDn8hSoH5RJmRi5BGvPqzExNrNFIiPFzIGPYU1Ajx3o29+Y/bd4ynSNL5mmIgDQiFhsa20/iA=="],
+    "@pickforge/brand": ["@pickforge/brand@0.2.0", "", { "dependencies": { "@fontsource/geist-mono": "^5.2.8", "@fontsource/geist-sans": "^5.2.5" } }, "sha512-dMHVKjokPbK3CptX8qiskAE1CyzUxAc7i54D+EPmgwUi/ZfQjmuXgpe0L2HIOlgexazcF1lttWOVubZARv+tCQ=="],
 
     "@pickforge/tauri-release": ["@pickforge/tauri-release@0.1.1", "", { "bin": { "pickforge-tauri-release": "dist/cli.js" } }, "sha512-zfAExyDKX3inV+Po25jkyEEcd4ABqzd3MEajFVttgdjb+TuCu0lfRJUVLJD+D1oqUqqNXUd+pKhHDAgksVyOcg=="],
 
