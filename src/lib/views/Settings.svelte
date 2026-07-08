@@ -263,6 +263,26 @@
         </div>
         <div class="row">
           <div>
+            <p class="row-label">Crash reports</p>
+            <p class="hint">
+              Send anonymous crash and error reports to help fix problems. Applies after restart.
+              {#if config.general.local_only}
+                <br />Disabled in local-only mode
+              {/if}
+            </p>
+          </div>
+          <button
+            type="button"
+            class="switch"
+            role="switch"
+            aria-checked={config.general.crash_reports && !config.general.local_only}
+            aria-label="Crash reports"
+            disabled={config.general.local_only}
+            onclick={() => (config!.general.crash_reports = !config!.general.crash_reports)}
+          ></button>
+        </div>
+        <div class="row">
+          <div>
             <p class="row-label">Keep audio files</p>
             <p class="hint">Recordings are deleted after transcription by default.</p>
           </div>

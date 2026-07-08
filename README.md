@@ -47,6 +47,10 @@ The single-instance plugin forwards `--toggle` to the running app, so the same c
 
 On Wayland the app runs natively (smooth WebKitGTK scrolling). The floating button stays on top through a KWin window rule that PickScribe installs automatically on KDE (forcing keep-above, no-focus, and skip-taskbar for the capsule). On Wayland compositors without window rules, set `PICKSCRIBE_X11=1` to fall back to XWayland keep-above.
 
+### Crash reports
+
+Production builds send anonymous crash and error reports by default so Pickforge can fix problems faster. Reports include stack traces, error messages, OS/app version, and loaded system libraries; the machine hostname is stripped. Native crash dumps include a process memory snapshot, which may contain fragments of data in memory at crash time, including recent transcript text. Reports never intentionally include transcripts, audio, API keys, file contents, or documents. You can turn this off in Settings: new events stop immediately, native crash capture stops after restart, Local-only mode disables reporting entirely, and normal development builds do not send reports.
+
 ## Current behavior
 
 - Toggle recording with one command: press once to start, press again to stop.

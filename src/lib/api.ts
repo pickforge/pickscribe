@@ -65,6 +65,7 @@ export interface AppConfig {
     float_button: boolean;
     typing_wpm: number;
     keep_audio: boolean;
+    crash_reports: boolean;
     local_only: boolean;
     theme: string;
   };

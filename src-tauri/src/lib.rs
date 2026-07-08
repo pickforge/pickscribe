@@ -16,6 +16,15 @@ use engine::{Engine, StatePayload};
 
 type CommandResult<T> = Result<T, String>;
 
+const SENTRY_DSN: &str = "https://241506ecc655d5fdb4c68b69f8b9c548@o4511699702317056.ingest.us.sentry.io/4511699813859328";
+
+fn sentry_enabled(cfg: &AppConfig) -> bool {
+    cfg.general.crash_reports
+        && !cfg.general.local_only
+        && (!cfg!(debug_assertions)
+            || std::env::var("PICKSCRIBE_SENTRY_DEBUG").ok().as_deref() == Some("1"))
+}
+
 fn err_string(err: impl std::fmt::Display) -> String {
     format!("{err}")
 }
@@ -89,7 +98,13 @@ pub(crate) const EVENT_CONFIG: &str = "pickscribe://config";
 #[tauri::command]
 fn update_app_config(app: AppHandle, config: AppConfig) -> CommandResult<AppConfig> {
     use tauri::Emitter;
+    let previous = AppConfig::load();
+    let was_sentry_enabled = sentry_enabled(&previous);
+    let is_sentry_enabled = sentry_enabled(&config);
     config.save().map_err(err_string)?;
+    if was_sentry_enabled && !is_sentry_enabled {
+        sentry::Hub::current().bind_client(None);
+    }
     ensure_float_window(&app, config.general.float_button);
     let _ = app.emit(EVENT_CONFIG, &config);
     Ok(config)
@@ -485,10 +500,50 @@ fn clamp_float_window_size(window: &tauri::WebviewWindow) {
 }
 
 pub fn run() {
+    let context = tauri::generate_context!();
+    let cfg = AppConfig::load();
+    let sentry_enabled = sentry_enabled(&cfg);
+    let release = format!(
+        "pickscribe@{}",
+        context
+            .config()
+            .version
+            .clone()
+            .expect("version in tauri.conf.json")
+    );
+    let sentry_client = sentry::init((
+        if sentry_enabled { SENTRY_DSN } else { "" },
+        sentry::ClientOptions {
+            release: Some(release.into()),
+            before_send: Some(Arc::new(|mut event| {
+                event.server_name = None;
+                event.breadcrumbs = Default::default();
+                Some(event)
+            })),
+            ..Default::default()
+        },
+    ));
+    let _minidump_guard = if sentry_enabled {
+        match tauri_plugin_sentry::minidump::init(&sentry_client) {
+            Ok(handle) => Some(handle),
+            Err(err) => {
+                eprintln!("failed to initialize Sentry minidump handler: {err}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let sentry_plugin = if sentry_enabled {
+        tauri_plugin_sentry::init(&sentry_client)
+    } else {
+        tauri_plugin_sentry::init_with_no_injection(&sentry_client)
+    };
     let engine = Arc::new(Engine::new().expect("failed to open PickScribe data directory"));
 
     tauri::Builder::default()
         .manage(engine)
+        .plugin(sentry_plugin)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -546,7 +601,7 @@ pub fn run() {
             }
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building PickScribe")
         .run(|app_handle, event| match event {
             tauri::RunEvent::WindowEvent {
