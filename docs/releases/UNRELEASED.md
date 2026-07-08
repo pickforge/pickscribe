@@ -28,6 +28,10 @@ then reset this file.
   boilerplate are ignored instead of appearing in the live transcript.
 - Added anonymous crash/error reports with a Settings opt-out; Local-only mode
   and normal development builds disable them.
+- Enabled local incremental transcription by default while keeping partial
+  segment cleanup opt-in.
+- Stopped showing cleanup fallback as a red error after a transcript was pasted
+  successfully.
 
 ## Internal/release changes
 
@@ -36,10 +40,10 @@ then reset this file.
   start guard, dashboard state, and release docs.
 - Added installer smoke tests for AppImage desktop integration and symlink-safe
   upgrades.
-- Added the disabled incremental dictation core foundation: segment/session
+- Added the incremental dictation core foundation: segment/session
   assembly, WAV segment slicing, and mocked runner safeguards.
-- Wired the Tauri app incremental dictation path behind the disabled
-  `[incremental]` flag, including live segment state, cancellation guards, and
+- Wired the Tauri app incremental dictation path behind the `[incremental]`
+  flag, including live segment state, cancellation guards, and
   full-WAV fallback.
 - Added opt-in legacy CLI incremental transcription via `--incremental` or
   `PICKSCRIBE_INCREMENTAL_DICTATION=1`, with final full-WAV fallback.

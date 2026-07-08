@@ -75,6 +75,14 @@
     pendingView = null;
   }
 
+  function handleSettingsDirtyChange(dirty: boolean) {
+    settingsDirty = dirty;
+  }
+
+  function bindSettingsActions(actions: { save: () => Promise<boolean>; discard: () => void }) {
+    settingsActions = actions;
+  }
+
   onMount(() => {
     if (!desktopApiAvailable()) {
       return;
@@ -168,8 +176,8 @@
         <History {historyVersion} />
       {:else}
         <Settings
-          onDirtyChange={(dirty) => (settingsDirty = dirty)}
-          bindActions={(actions) => (settingsActions = actions)}
+          onDirtyChange={handleSettingsDirtyChange}
+          bindActions={bindSettingsActions}
         />
       {/if}
     </main>

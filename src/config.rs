@@ -75,7 +75,7 @@ pub struct IncrementalConfig {
 impl Default for IncrementalConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             cleanup_segments: false,
             target_ms: 5_000,
             max_ms: 10_000,
@@ -370,10 +370,10 @@ mod tests {
     }
 
     #[test]
-    fn incremental_config_defaults_to_safe_disabled_values() {
+    fn incremental_config_defaults_to_live_local_segments_only() {
         let cfg = AppConfig::default();
 
-        assert!(!cfg.incremental.enabled);
+        assert!(cfg.incremental.enabled);
         assert!(!cfg.incremental.cleanup_segments);
         assert_eq!(cfg.incremental.target_ms, 5_000);
         assert_eq!(cfg.incremental.max_ms, 10_000);
