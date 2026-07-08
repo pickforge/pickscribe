@@ -93,8 +93,12 @@ jobs:
           fi
 
           release_version="$(jq -r '.version' src-tauri/tauri.conf.json)"
-          npx --yes @sentry/cli@2 debug-files upload --include-sources target/release
-          npx --yes @sentry/cli@2 sourcemaps upload --release "pickscribe@${release_version}" dist
+          if ! {
+            npx --yes @sentry/cli@2 debug-files upload --include-sources target/release &&
+              npx --yes @sentry/cli@2 sourcemaps upload --release "pickscribe@${release_version}" dist
+          }; then
+            echo "::warning::Sentry upload failed; continuing release"
+          fi
 
       - name: Collect release assets
         env:
