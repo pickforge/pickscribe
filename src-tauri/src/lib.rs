@@ -3,6 +3,7 @@ mod kwin;
 mod tray;
 
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -21,12 +22,43 @@ type CommandResult<T> = Result<T, String>;
 const SENTRY_DSN: &str = "https://241506ecc655d5fdb4c68b69f8b9c548@o4511699702317056.ingest.us.sentry.io/4511699813859328";
 static TELEMETRY_ENABLED: AtomicBool = AtomicBool::new(false);
 static SENTRY_CLIENT: OnceLock<Arc<sentry::Client>> = OnceLock::new();
+static MINIDUMP_GUARD: Mutex<Option<tauri_plugin_sentry::minidump::Handle>> = Mutex::new(None);
 
 fn sentry_enabled(cfg: &AppConfig) -> bool {
     cfg.general.crash_reports
         && !cfg.general.local_only
         && (!cfg!(debug_assertions)
             || std::env::var("PICKSCRIBE_SENTRY_DEBUG").ok().as_deref() == Some("1"))
+}
+
+fn basename(value: &str) -> String {
+    let trimmed = value.trim_end_matches(['/', '\\']);
+    trimmed
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or(value)
+        .to_string()
+}
+
+fn strip_debug_image_paths(event: &mut sentry::protocol::Event<'_>) {
+    for image in &mut event.debug_meta.to_mut().images {
+        match image {
+            sentry::protocol::DebugImage::Symbolic(image) => {
+                image.name = basename(&image.name);
+                if let Some(debug_file) = &mut image.debug_file {
+                    *debug_file = basename(debug_file);
+                }
+            }
+            sentry::protocol::DebugImage::Wasm(image) => {
+                image.code_file = basename(&image.code_file);
+                if let Some(debug_file) = &mut image.debug_file {
+                    *debug_file = basename(debug_file);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 fn err_string(err: impl std::fmt::Display) -> String {
@@ -111,6 +143,9 @@ fn update_app_config(app: AppHandle, config: AppConfig) -> CommandResult<AppConf
         }
     } else {
         sentry::Hub::main().bind_client(None);
+        if let Ok(mut guard) = MINIDUMP_GUARD.lock() {
+            guard.take();
+        }
     }
     ensure_float_window(&app, config.general.float_button);
     let _ = app.emit(EVENT_CONFIG, &config);
@@ -529,6 +564,7 @@ pub fn run() {
                 }
                 event.server_name = None;
                 event.breadcrumbs = Default::default();
+                strip_debug_image_paths(&mut event);
                 Some(event)
             })),
             ..Default::default()
@@ -539,17 +575,18 @@ pub fn run() {
             let _ = SENTRY_CLIENT.set(client);
         }
     }
-    let _minidump_guard = if sentry_enabled {
+    if sentry_enabled {
         match tauri_plugin_sentry::minidump::init(&sentry_client) {
-            Ok(handle) => Some(handle),
+            Ok(handle) => {
+                if let Ok(mut guard) = MINIDUMP_GUARD.lock() {
+                    *guard = Some(handle);
+                }
+            }
             Err(err) => {
                 eprintln!("failed to initialize Sentry minidump handler: {err}");
-                None
             }
         }
-    } else {
-        None
-    };
+    }
     let sentry_plugin = if sentry_enabled {
         tauri_plugin_sentry::init(&sentry_client)
     } else {
