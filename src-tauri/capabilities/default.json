@@ -12,6 +12,7 @@
     "core:window:allow-close",
     "core:window:allow-set-position",
     "core:window:allow-outer-position",
+    "sentry:default",
     "autostart:allow-enable",
     "autostart:allow-disable",
     "autostart:allow-is-enabled",

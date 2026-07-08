@@ -26,6 +26,8 @@ then reset this file.
   and the legacy CLI.
 - Made partial segment cleanup conservative so instruction examples and
   boilerplate are ignored instead of appearing in the live transcript.
+- Added anonymous crash/error reports with a Settings opt-out; Local-only mode
+  and normal development builds disable them.
 
 ## Internal/release changes
 
@@ -43,6 +45,9 @@ then reset this file.
   `PICKSCRIBE_INCREMENTAL_DICTATION=1`, with final full-WAV fallback.
 - Kept segment cleanup separate from incremental transcription and disabled by
   default; final paste/history still use one final cleanup pass.
+- Added Sentry Rust/webview/minidump integration, release-aligned debug
+  symbol/source-map upload wiring, and privacy scrubbing for hostname and
+  breadcrumbs.
 
 ## Validation
 

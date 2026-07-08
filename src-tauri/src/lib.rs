@@ -3,6 +3,9 @@ mod kwin;
 mod tray;
 
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use pickscribe::config::AppConfig;
 use pickscribe::engine::{command_exists, stt};
@@ -15,6 +18,48 @@ use tauri_plugin_autostart::MacosLauncher;
 use engine::{Engine, StatePayload};
 
 type CommandResult<T> = Result<T, String>;
+
+const SENTRY_DSN: &str = "https://241506ecc655d5fdb4c68b69f8b9c548@o4511699702317056.ingest.us.sentry.io/4511699813859328";
+static TELEMETRY_ENABLED: AtomicBool = AtomicBool::new(false);
+static SENTRY_CLIENT: OnceLock<Arc<sentry::Client>> = OnceLock::new();
+static MINIDUMP_GUARD: Mutex<Option<tauri_plugin_sentry::minidump::Handle>> = Mutex::new(None);
+
+fn sentry_enabled(cfg: &AppConfig) -> bool {
+    cfg.general.crash_reports
+        && !cfg.general.local_only
+        && (!cfg!(debug_assertions)
+            || std::env::var("PICKSCRIBE_SENTRY_DEBUG").ok().as_deref() == Some("1"))
+}
+
+fn basename(value: &str) -> String {
+    let trimmed = value.trim_end_matches(['/', '\\']);
+    trimmed
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or(value)
+        .to_string()
+}
+
+fn strip_debug_image_paths(event: &mut sentry::protocol::Event<'_>) {
+    for image in &mut event.debug_meta.to_mut().images {
+        match image {
+            sentry::protocol::DebugImage::Symbolic(image) => {
+                image.name = basename(&image.name);
+                if let Some(debug_file) = &mut image.debug_file {
+                    *debug_file = basename(debug_file);
+                }
+            }
+            sentry::protocol::DebugImage::Wasm(image) => {
+                image.code_file = basename(&image.code_file);
+                if let Some(debug_file) = &mut image.debug_file {
+                    *debug_file = basename(debug_file);
+                }
+            }
+            _ => {}
+        }
+    }
+}
 
 fn err_string(err: impl std::fmt::Display) -> String {
     format!("{err}")
@@ -89,7 +134,19 @@ pub(crate) const EVENT_CONFIG: &str = "pickscribe://config";
 #[tauri::command]
 fn update_app_config(app: AppHandle, config: AppConfig) -> CommandResult<AppConfig> {
     use tauri::Emitter;
+    let is_sentry_enabled = sentry_enabled(&config);
     config.save().map_err(err_string)?;
+    TELEMETRY_ENABLED.store(is_sentry_enabled, Ordering::Relaxed);
+    if is_sentry_enabled {
+        if let Some(client) = SENTRY_CLIENT.get() {
+            sentry::Hub::main().bind_client(Some(Arc::clone(client)));
+        }
+    } else {
+        sentry::Hub::main().bind_client(None);
+        if let Ok(mut guard) = MINIDUMP_GUARD.lock() {
+            guard.take();
+        }
+    }
     ensure_float_window(&app, config.general.float_button);
     let _ = app.emit(EVENT_CONFIG, &config);
     Ok(config)
@@ -485,10 +542,61 @@ fn clamp_float_window_size(window: &tauri::WebviewWindow) {
 }
 
 pub fn run() {
+    let context = tauri::generate_context!();
+    let cfg = AppConfig::load();
+    let sentry_enabled = sentry_enabled(&cfg);
+    TELEMETRY_ENABLED.store(sentry_enabled, Ordering::Relaxed);
+    let release = format!(
+        "pickscribe@{}",
+        context
+            .config()
+            .version
+            .clone()
+            .expect("version in tauri.conf.json")
+    );
+    let sentry_client = sentry::init((
+        if sentry_enabled { SENTRY_DSN } else { "" },
+        sentry::ClientOptions {
+            release: Some(release.into()),
+            before_send: Some(Arc::new(|mut event| {
+                if !TELEMETRY_ENABLED.load(Ordering::Relaxed) {
+                    return None;
+                }
+                event.server_name = None;
+                event.breadcrumbs = Default::default();
+                strip_debug_image_paths(&mut event);
+                Some(event)
+            })),
+            ..Default::default()
+        },
+    ));
+    if sentry_client.is_enabled() {
+        if let Some(client) = sentry::Hub::main().client() {
+            let _ = SENTRY_CLIENT.set(client);
+        }
+    }
+    if sentry_enabled {
+        match tauri_plugin_sentry::minidump::init(&sentry_client) {
+            Ok(handle) => {
+                if let Ok(mut guard) = MINIDUMP_GUARD.lock() {
+                    *guard = Some(handle);
+                }
+            }
+            Err(err) => {
+                eprintln!("failed to initialize Sentry minidump handler: {err}");
+            }
+        }
+    }
+    let sentry_plugin = if sentry_enabled {
+        tauri_plugin_sentry::init(&sentry_client)
+    } else {
+        tauri_plugin_sentry::init_with_no_injection(&sentry_client)
+    };
     let engine = Arc::new(Engine::new().expect("failed to open PickScribe data directory"));
 
     tauri::Builder::default()
         .manage(engine)
+        .plugin(sentry_plugin)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -546,7 +654,7 @@ pub fn run() {
             }
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building PickScribe")
         .run(|app_handle, event| match event {
             tauri::RunEvent::WindowEvent {

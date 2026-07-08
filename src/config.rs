@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -14,6 +15,7 @@ pub struct GeneralConfig {
     pub float_button: bool,
     pub typing_wpm: u32,
     pub keep_audio: bool,
+    pub crash_reports: bool,
     /// When true, no text ever leaves this machine: only loopback cleanup
     /// endpoints are allowed, everything else is skipped.
     pub local_only: bool,
@@ -28,6 +30,7 @@ impl Default for GeneralConfig {
             float_button: true,
             typing_wpm: 40,
             keep_audio: false,
+            crash_reports: true,
             local_only: false,
             theme: "system".into(),
         }
@@ -175,8 +178,11 @@ pub fn config_path() -> PathBuf {
 
 impl AppConfig {
     pub fn load() -> Self {
-        let path = config_path();
-        match fs::read_to_string(&path) {
+        Self::load_from_path(&config_path())
+    }
+
+    fn load_from_path(path: &Path) -> Self {
+        match fs::read_to_string(path) {
             Ok(raw) => toml::from_str(&raw).unwrap_or_default(),
             Err(_) => Self::default(),
         }
@@ -185,8 +191,12 @@ impl AppConfig {
     pub fn save(&self) -> Result<()> {
         let dir = config_dir();
         fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        self.save_to_path(&config_path())
+    }
+
+    fn save_to_path(&self, path: &Path) -> Result<()> {
         let raw = toml::to_string_pretty(self)?;
-        fs::write(config_path(), raw).context("writing config.toml")?;
+        fs::write(path, raw).context("writing config.toml")?;
         Ok(())
     }
 
@@ -386,5 +396,38 @@ mod tests {
         assert!(!cfg.incremental.cleanup_segments);
         assert_eq!(cfg.incremental.target_ms, 3_000);
         assert_eq!(cfg.incremental.max_ms, 10_000);
+    }
+
+    #[test]
+    fn crash_reports_default_to_enabled_when_absent() {
+        let cfg: AppConfig = toml::from_str(
+            r#"
+            [general]
+            local_only = true
+            "#,
+        )
+        .unwrap();
+
+        assert!(cfg.general.crash_reports);
+    }
+
+    #[test]
+    fn crash_reports_round_trip_through_save_and_load() {
+        let path = std::env::temp_dir().join(format!(
+            "pickscribe-config-test-{}-{}.toml",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut cfg = AppConfig::default();
+        cfg.general.crash_reports = false;
+
+        cfg.save_to_path(&path).unwrap();
+        let loaded = AppConfig::load_from_path(&path);
+        let _ = fs::remove_file(path);
+
+        assert!(!loaded.general.crash_reports);
     }
 }
