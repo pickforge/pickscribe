@@ -44,6 +44,9 @@ fn basename(value: &str) -> String {
 fn strip_debug_image_paths(event: &mut sentry::protocol::Event<'_>) {
     for image in &mut event.debug_meta.to_mut().images {
         match image {
+            sentry::protocol::DebugImage::Apple(image) => {
+                image.name = basename(&image.name);
+            }
             sentry::protocol::DebugImage::Symbolic(image) => {
                 image.name = basename(&image.name);
                 if let Some(debug_file) = &mut image.debug_file {
@@ -111,6 +114,79 @@ mod tests {
             parse_chord_arg(&args(&["pickscribe-app", "--paste-chord=ctrl-alt-v"])),
             None
         );
+    }
+
+    #[test]
+    fn strip_debug_image_paths_basenames_all_image_variants() {
+        let apple_uuid = "2df005a8-67ab-4d33-98f2-52f9f6de4d15";
+        let symbolic_id = "494f3aea-88fa-4296-9644-fa8ef5d139b6-1234";
+        let wasm_id = "8c954262-f905-4992-8a61-f60825f4553b";
+        let mut event = sentry::protocol::Event {
+            debug_meta: std::borrow::Cow::Owned(sentry::protocol::DebugMeta {
+                images: vec![
+                    sentry::protocol::AppleDebugImage {
+                        name: "/Users/alice/Applications/PickScribe.app/Contents/MacOS/PickScribe"
+                            .into(),
+                        arch: Some("arm64".into()),
+                        cpu_type: Some(16_777_228),
+                        cpu_subtype: Some(0),
+                        image_addr: 4096.into(),
+                        image_size: 8192,
+                        image_vmaddr: 12288.into(),
+                        uuid: apple_uuid.parse().unwrap(),
+                    }
+                    .into(),
+                    sentry::protocol::SymbolicDebugImage {
+                        name: "/home/alice/Applications/PickScribe.AppImage".into(),
+                        arch: Some("x86_64".into()),
+                        image_addr: 0.into(),
+                        image_size: 4096,
+                        image_vmaddr: 0.into(),
+                        id: symbolic_id.parse().unwrap(),
+                        code_id: None,
+                        debug_file: Some("C:\\Users\\alice\\pickscribe.debug".into()),
+                    }
+                    .into(),
+                    sentry::protocol::WasmDebugImage {
+                        name: "pickscribe_bg.wasm".into(),
+                        debug_id: wasm_id.parse().unwrap(),
+                        debug_file: Some("/home/alice/debug/pickscribe_bg.wasm.debug".into()),
+                        code_id: Some("abc123".into()),
+                        code_file: "C:\\Users\\alice\\pickscribe_bg.wasm".into(),
+                    }
+                    .into(),
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        strip_debug_image_paths(&mut event);
+
+        match &event.debug_meta.images[0] {
+            sentry::protocol::DebugImage::Apple(image) => {
+                assert_eq!(image.name, "PickScribe");
+                assert_eq!(image.uuid.to_string(), apple_uuid);
+                assert_eq!(image.arch.as_deref(), Some("arm64"));
+            }
+            other => panic!("expected apple debug image, got {other:?}"),
+        }
+        match &event.debug_meta.images[1] {
+            sentry::protocol::DebugImage::Symbolic(image) => {
+                assert_eq!(image.name, "PickScribe.AppImage");
+                assert_eq!(image.debug_file.as_deref(), Some("pickscribe.debug"));
+                assert_eq!(image.id.to_string(), symbolic_id);
+            }
+            other => panic!("expected symbolic debug image, got {other:?}"),
+        }
+        match &event.debug_meta.images[2] {
+            sentry::protocol::DebugImage::Wasm(image) => {
+                assert_eq!(image.code_file, "pickscribe_bg.wasm");
+                assert_eq!(image.debug_file.as_deref(), Some("pickscribe_bg.wasm.debug"));
+                assert_eq!(image.debug_id.to_string(), wasm_id);
+            }
+            other => panic!("expected wasm debug image, got {other:?}"),
+        }
     }
 }
 
