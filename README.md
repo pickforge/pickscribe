@@ -33,6 +33,20 @@ The repo ships **PickScribe.app**, a Tauri 2 + Svelte 5 desktop app (same stack 
 - **Local-only mode** — one switch that guarantees no text leaves the machine: only loopback cleanup endpoints (Ollama, LM Studio, llama.cpp server…) are allowed, remote providers are blocked and fall back to the raw transcript.
 - **Bring your own provider** — besides DeepSeek/OpenAI/Ollama there is a custom OpenAI-compatible provider (OpenRouter, OpenCode, vLLM…): point it at any `/chat/completions` URL with your own key, then hit "Fetch models" to pick from the provider's `/models` route — or just type the model name.
 
+## Screenshots
+
+Real captures of the app in its studio chrome (frameless bracket titlebar, unified status bar).
+
+<p align="center">
+  <img src="assets/screenshots/pickscribe-dictate.png" alt="PickScribe dictation view — bracket titlebar, record orb, time-saved metrics" width="900">
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/pickscribe-settings.png" alt="PickScribe settings — system check and cleanup provider" width="900">
+  <br>
+  <img src="assets/screenshots/pickscribe-float-capsule.png" alt="PickScribe floating capsule" width="208">
+</p>
+
 <p align="center">
   <img src="assets/branding/pickscribe-dictation-mock.svg" alt="PICKSCRIBE · DICTATION — record orb and waveform, local pipeline, raw vs cleaned history, and time-saved metrics" width="900">
 </p>

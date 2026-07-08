@@ -123,7 +123,7 @@
 <section class="settings">
   <header class="head fade-up">
     <div>
-      <p class="eyebrow ember">§ 03 · Settings</p>
+      <p class="eyebrow ember pf-eyebrow-row"><span class="pf-eyebrow-tick"></span>§ 03 · Settings</p>
       <h2>Tune PickScribe to your voice</h2>
     </div>
     <div class="head-actions">
@@ -738,11 +738,12 @@
   }
 
   .save-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 999px;
-    background: var(--ember);
-    animation: ember-pulse 2.4s var(--ease-forge) infinite;
+    width: 4px;
+    height: 9px;
+    border: var(--pf-bracket-width) solid var(--ember);
+    border-right: none;
+    border-radius: 2px 0 0 2px;
+    flex: none;
   }
 
   .save-text {

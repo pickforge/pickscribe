@@ -6,6 +6,15 @@ then reset this file.
 
 ## User-facing changes
 
+- Adopted the Pickforge Studio shared chrome: a frameless main window with a
+  38px titlebar (brand mark + wordmark, live dictation-stage status pill, and
+  platform-aware minimize/maximize/close controls with edge/corner resize
+  handles) replacing the native GTK titlebar and the decorative dots header.
+- Switched the blinking status dots to the bracket motif (bracket status
+  indicators, `[` section-eyebrow ticks, ember bracket ticks for unsaved
+  changes) and unified the bottom bar to the shared 24px statusbar.
+- Fixed the stray horizontal scrollbar that could appear along the window
+  bottom.
 - Added an in-app platform gate: Linux remains the supported release target,
   while macOS and Windows show the native work still required before release.
 - Updated install and release messaging so PickScribe no longer claims
@@ -72,6 +81,8 @@ then reset this file.
   `cargo-fmt` component in this environment.
 - Updater flow.
 - Native-host smoke tests.
+- Live visual check of the frameless studio titlebar, window controls, and
+  resize handles in a running WebKitGTK window (verified via checks/tests only).
 
 ### Release blockers
 

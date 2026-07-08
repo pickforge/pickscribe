@@ -95,7 +95,7 @@
 <section class="history">
   <header class="head fade-up">
     <div>
-      <p class="eyebrow ember">§ 02 · History</p>
+      <p class="eyebrow ember pf-eyebrow-row"><span class="pf-eyebrow-tick"></span>§ 02 · History</p>
       <h2>Every dictation, before and after cleanup</h2>
     </div>
     {#if entries.length > 0}
