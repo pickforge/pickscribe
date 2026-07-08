@@ -602,6 +602,7 @@ impl Engine {
         if !self.is_session_current(&session_id, &cancel_token) {
             return;
         }
+        let (final_error, final_message) = final_delivery_status(paste_error, &outcome);
 
         let entry = NewEntry {
             duration_ms: duration_ms as i64,
@@ -637,14 +638,57 @@ impl Engine {
             s.stage = Stage::Idle;
             s.recording_started_ms = None;
             s.segments.clear();
-            s.error = paste_error.or(outcome.error.clone());
-            s.message = Some(if outcome.cleaned {
-                "Cleaned and pasted".into()
-            } else {
-                "Pasted raw transcript".into()
-            });
+            s.error = final_error;
+            s.message = Some(final_message);
             s.last_entry = last_entry;
         });
+    }
+}
+
+fn final_delivery_status(
+    paste_error: Option<String>,
+    outcome: &cleanup::CleanupOutcome,
+) -> (Option<String>, String) {
+    let message = if outcome.cleaned {
+        "Cleaned and pasted"
+    } else if outcome.error.is_some() {
+        "Pasted raw transcript; cleanup unavailable"
+    } else {
+        "Pasted raw transcript"
+    };
+
+    (paste_error, message.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn outcome(cleaned: bool, error: Option<&str>) -> cleanup::CleanupOutcome {
+        cleanup::CleanupOutcome {
+            text: "transcript".into(),
+            provider: "ollama".into(),
+            model: "qwen2.5:14b".into(),
+            cleaned,
+            error: error.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn cleanup_fallback_after_success_is_neutral_status() {
+        let (error, message) = final_delivery_status(None, &outcome(false, Some("model missing")));
+
+        assert_eq!(error, None);
+        assert_eq!(message, "Pasted raw transcript; cleanup unavailable");
+    }
+
+    #[test]
+    fn paste_failure_still_surfaces_as_error() {
+        let (error, message) =
+            final_delivery_status(Some("paste failed".into()), &outcome(false, None));
+
+        assert_eq!(error.as_deref(), Some("paste failed"));
+        assert_eq!(message, "Pasted raw transcript");
     }
 }
 
