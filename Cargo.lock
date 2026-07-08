@@ -3378,7 +3378,7 @@ dependencies = [
 
 [[package]]
 name = "pickscribe"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -3391,7 +3391,7 @@ dependencies = [
 
 [[package]]
 name = "pickscribe-app"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "gtk",
