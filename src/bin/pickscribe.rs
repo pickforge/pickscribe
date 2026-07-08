@@ -3,7 +3,7 @@ use clap::{Parser, ValueEnum};
 use pickscribe::{
     config::{AppConfig, IncrementalConfig},
     engine::{
-        audio_segments,
+        audio_segments, cleanup as cleanup_engine,
         segments::{RecordingSession, TranscriptSegment, TranscriptSegmentStatus},
     },
 };
@@ -2045,11 +2045,19 @@ fn cleanup_segment_text(
     local_only: bool,
     is_cancelled: impl Fn() -> bool,
 ) -> Result<Option<String>> {
-    let cleanup = resolve_cleanup_command(args)?;
+    let cleanup_command = resolve_cleanup_command(args)?;
+    let bundled_cleanup = args.cleanup_command.is_none()
+        && cleanup_command
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| matches!(name, "pickscribe-cleanup" | "pickscribe-cleanup-gui"));
     if local_only && args.cleanup_command.is_some() {
         bail!("local-only mode blocks custom CLI segment cleanup commands");
     }
     let mut cleanup_args: Vec<OsString> = vec!["--stdout-only".into()];
+    if bundled_cleanup {
+        cleanup_args.push("--segment".into());
+    }
     if local_only {
         cleanup_args.push("--local-only".into());
     }
@@ -2057,14 +2065,17 @@ fn cleanup_segment_text(
         cleanup_args.push("--no-llm".into());
     }
 
-    let (mut cmd, process_group) = cancellable_program_command(&cleanup);
+    let (mut cmd, process_group) = cancellable_program_command(&cleanup_command);
     cmd.args(cleanup_args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
-    let mut child = cmd
-        .spawn()
-        .with_context(|| format!("failed to start cleanup command `{}`", cleanup.display()))?;
+    let mut child = cmd.spawn().with_context(|| {
+        format!(
+            "failed to start cleanup command `{}`",
+            cleanup_command.display()
+        )
+    })?;
 
     {
         let mut stdin = child.stdin.take().context("failed to open cleanup stdin")?;
@@ -2094,7 +2105,10 @@ fn cleanup_segment_text(
         bail!("cleanup command exited with {}", status);
     }
     let cleaned = stdout.trim().to_string();
-    Ok((!cleaned.is_empty()).then_some(cleaned))
+    Ok((!cleaned.is_empty()
+        && cleaned.trim() != transcript.trim()
+        && cleanup_engine::segment_cleanup_is_safe(transcript, &cleaned))
+    .then_some(cleaned))
 }
 
 fn cleanup_transcript(text: &str) -> String {
@@ -2413,6 +2427,25 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_segment_text_ignores_exact_raw_fallback() -> Result<()> {
+        let dir = temp_dir("segment-cleanup-raw-fallback");
+        fs::create_dir_all(&dir)?;
+        let script = dir.join("cleanup.sh");
+        fs::write(
+            &script,
+            "#!/usr/bin/env bash\nwhile [[ ${1-} == --* ]]; do shift; done\ncat\n",
+        )?;
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755))?;
+        let args = parse_args(&["pickscribe", "--cleanup-command", script.to_str().unwrap()]);
+
+        let cleaned = cleanup_segment_text(&args, "hello segment", false, || false)?;
+
+        assert!(cleaned.is_none());
+        let _ = fs::remove_dir_all(dir);
+        Ok(())
+    }
+
+    #[test]
     fn cleanup_segment_text_blocks_custom_commands_in_local_only_mode() -> Result<()> {
         let args = parse_args(&["pickscribe", "--cleanup-command", "/bin/true"]);
 
@@ -2438,7 +2471,7 @@ mod tests {
 
         let cleaned = cleanup_segment_text(&args, "hello segment", false, || false)?;
 
-        assert_eq!(cleaned.as_deref().map(str::len), Some(200000));
+        assert!(cleaned.is_none());
         let _ = fs::remove_dir_all(dir);
         Ok(())
     }

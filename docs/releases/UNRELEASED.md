@@ -15,6 +15,8 @@ then reset this file.
 - Fixed the floating capsule waveform alignment.
 - Added opt-in segment cleanup controls for incremental dictation in Settings
   and the legacy CLI.
+- Made partial segment cleanup conservative so instruction examples and
+  boilerplate are ignored instead of appearing in the live transcript.
 
 ## Internal/release changes
 
@@ -54,6 +56,8 @@ then reset this file.
   worker smoke checks.
 - Mocked CLI segment cleanup smoke checks for enabled cleanup, unsafe-mode
   gating, and slow cleanup cancel/nonblocking behavior.
+- Segment cleanup guard unit tests for conservative edits, brand casing, and
+  instruction-example leaks.
 - `bun run test:installer`
 - Browser preview of `/?window=float` at `208x60`
 

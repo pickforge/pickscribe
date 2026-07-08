@@ -862,7 +862,7 @@ fn start_segment_cleanup_worker(worker: &IncrementalWorker) -> SegmentCleanupWor
                 break;
             }
 
-            let outcome = cleanup::clean(&cfg, &raw.raw_text);
+            let outcome = cleanup::clean_segment(&cfg, &raw.raw_text);
             if thread_cancel_token.is_cancelled()
                 || worker_cancel_token.is_cancelled()
                 || !engine.is_session_current(&session_id, &session_token)

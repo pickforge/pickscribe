@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, ValueEnum};
-use pickscribe::engine::cleanup::is_local_endpoint;
+use pickscribe::engine::cleanup::{is_local_endpoint, segment_cleanup_is_safe};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -125,6 +125,10 @@ struct Args {
     /// Restrict cleanup to loopback endpoints. Used by incremental segment cleanup.
     #[arg(long, env = "PICKSCRIBE_LOCAL_ONLY", hide = true)]
     local_only: bool,
+
+    /// Use conservative prompt and output validation for incremental segment cleanup.
+    #[arg(long, hide = true)]
+    segment: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -226,13 +230,24 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let final_text = if args.no_llm || args.provider == Provider::None {
+    let final_text = if args.segment && (args.no_llm || args.provider == Provider::None) {
+        return Ok(());
+    } else if args.no_llm || args.provider == Provider::None {
         input.trim().to_owned()
     } else {
         match clean_with_llm(&args, input.trim()) {
-            Ok(cleaned) if !cleaned.trim().is_empty() => cleaned.trim().to_owned(),
+            Ok(cleaned)
+                if !cleaned.trim().is_empty()
+                    && (!args.segment
+                        || (cleaned.trim() != input.trim()
+                            && segment_cleanup_is_safe(input.trim(), cleaned.trim()))) =>
+            {
+                cleaned.trim().to_owned()
+            }
+            Ok(_) if args.segment => return Ok(()),
             Ok(_) => input.trim().to_owned(),
             Err(err) if args.strict => return Err(err),
+            Err(_) if args.segment => return Ok(()),
             Err(err) => {
                 warn(
                     &args,
@@ -300,14 +315,29 @@ fn clean_with_llm(args: &Args, text: &str) -> Result<String> {
     }
 
     let instructions = args.instructions.as_deref().unwrap_or(DEFAULT_INSTRUCTIONS);
-    let user_prompt = format!("{instructions}\n\nText:\n{text}");
+    let (system_prompt, user_prompt) = if args.segment {
+        (
+            "You clean one short dictated transcript fragment for a live preview.".to_owned(),
+            format!(
+                "Cleanup instructions, spelling notes, and vocabulary:\n{instructions}\n\n\
+Fragment:\n{text}\n\n\
+Return only a conservative cleanup of this fragment. Do not add examples, \
+complete unfinished thoughts, expand lists, or use words not supported by the fragment."
+            ),
+        )
+    } else {
+        (
+            "You clean up dictated text for immediate pasting.".to_owned(),
+            format!("{instructions}\n\nText:\n{text}"),
+        )
+    };
 
     let payload = ChatRequest {
         model: config.model,
         messages: vec![
             ChatMessage {
                 role: "system".to_owned(),
-                content: "You clean up dictated text for immediate pasting.".to_owned(),
+                content: system_prompt,
             },
             ChatMessage {
                 role: "user".to_owned(),
