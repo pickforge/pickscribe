@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +67,22 @@ fn now_unix() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+fn history_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryEntry> {
+    Ok(HistoryEntry {
+        id: row.get(0)?,
+        created_at: row.get(1)?,
+        duration_ms: row.get(2)?,
+        raw_text: row.get(3)?,
+        cleaned_text: row.get(4)?,
+        provider: row.get(5)?,
+        model: row.get(6)?,
+        language: row.get(7)?,
+        source_file: row.get(8)?,
+        segments_json: row.get(9)?,
+        word_count: row.get(10)?,
+    })
 }
 
 impl HistoryDb {
@@ -152,28 +168,13 @@ impl HistoryDb {
     pub fn list(&self, search: &str, limit: i64, offset: i64) -> Result<Vec<HistoryEntry>> {
         let conn = self.conn.lock().unwrap();
         let mut out = Vec::new();
-        let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<HistoryEntry> {
-            Ok(HistoryEntry {
-                id: row.get(0)?,
-                created_at: row.get(1)?,
-                duration_ms: row.get(2)?,
-                raw_text: row.get(3)?,
-                cleaned_text: row.get(4)?,
-                provider: row.get(5)?,
-                model: row.get(6)?,
-                language: row.get(7)?,
-                source_file: row.get(8)?,
-                segments_json: row.get(9)?,
-                word_count: row.get(10)?,
-            })
-        };
         if search.trim().is_empty() {
             let mut stmt = conn.prepare(
                 "SELECT id, created_at, duration_ms, raw_text, cleaned_text,
                         provider, model, language, source_file, segments_json, word_count
                  FROM transcriptions ORDER BY created_at DESC LIMIT ?1 OFFSET ?2",
             )?;
-            let rows = stmt.query_map(params![limit, offset], map_row)?;
+            let rows = stmt.query_map(params![limit, offset], history_entry_from_row)?;
             for row in rows {
                 out.push(row?);
             }
@@ -186,12 +187,25 @@ impl HistoryDb {
                  WHERE raw_text LIKE ?1 OR cleaned_text LIKE ?1
                  ORDER BY created_at DESC LIMIT ?2 OFFSET ?3",
             )?;
-            let rows = stmt.query_map(params![pattern, limit, offset], map_row)?;
+            let rows = stmt.query_map(params![pattern, limit, offset], history_entry_from_row)?;
             for row in rows {
                 out.push(row?);
             }
         }
         Ok(out)
+    }
+
+    pub fn get(&self, id: i64) -> Result<Option<HistoryEntry>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, created_at, duration_ms, raw_text, cleaned_text,
+                    provider, model, language, source_file, segments_json, word_count
+             FROM transcriptions WHERE id = ?1",
+            params![id],
+            history_entry_from_row,
+        )
+        .optional()
+        .context("loading history entry")
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
@@ -214,7 +228,7 @@ impl HistoryDb {
                         COALESCE(SUM(word_count), 0),
                         COALESCE(SUM(duration_ms), 0),
                         COALESCE(MAX(duration_ms), 0)
-                 FROM transcriptions",
+                 FROM transcriptions WHERE source_file IS NULL",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )?;
@@ -225,7 +239,8 @@ impl HistoryDb {
                     COALESCE(SUM(word_count), 0),
                     COUNT(*)
              FROM transcriptions
-             WHERE created_at >= unixepoch('now', '-13 days', 'start of day')
+             WHERE source_file IS NULL
+               AND created_at >= unixepoch('now', '-13 days', 'start of day')
              GROUP BY day ORDER BY day ASC",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -321,6 +336,47 @@ mod tests {
     }
 
     #[test]
+    fn metrics_exclude_file_transcriptions() -> Result<()> {
+        let path = temp_db_path("history-file-metrics");
+        let db = HistoryDb::open(&path)?;
+
+        db.insert(&NewEntry {
+            duration_ms: 1_000,
+            raw_text: "one two three".into(),
+            cleaned_text: None,
+            provider: "none".into(),
+            model: String::new(),
+            language: "en".into(),
+            source_file: None,
+            segments_json: None,
+        })?;
+        db.insert(&NewEntry {
+            duration_ms: 7_200_000,
+            raw_text: "video transcript".into(),
+            cleaned_text: None,
+            provider: "none".into(),
+            model: String::new(),
+            language: "en".into(),
+            source_file: Some("meeting.mp4".into()),
+            segments_json: None,
+        })?;
+
+        let metrics = db.metrics(60)?;
+
+        assert_eq!(metrics.sessions, 1);
+        assert_eq!(metrics.words, 3);
+        assert_eq!(metrics.speaking_ms, 1_000);
+        assert_eq!(metrics.longest_session_ms, 1_000);
+        assert_eq!(metrics.avg_words_per_session, 3.0);
+        assert!((metrics.minutes_saved - (2.0 / 60.0)).abs() < 0.0001);
+        assert_eq!(metrics.days.iter().map(|day| day.sessions).sum::<i64>(), 1);
+        assert_eq!(metrics.days.iter().map(|day| day.words).sum::<i64>(), 3);
+
+        std::fs::remove_file(path).ok();
+        Ok(())
+    }
+
+    #[test]
     fn metrics_handles_zero_typing_wpm_without_dividing_by_zero() -> Result<()> {
         let path = temp_db_path("history-zero-wpm");
         let db = HistoryDb::open(&path)?;
@@ -382,6 +438,8 @@ mod tests {
         assert_eq!(entries[0].id, id);
         assert_eq!(entries[0].source_file.as_deref(), Some("/home/me/recording.mp4"));
         assert_eq!(entries[0].segments_json.as_deref(), Some("[{\"start_ms\":0}]"));
+        assert_eq!(db.get(id)?.map(|entry| entry.id), Some(id));
+        assert!(db.get(id + 1)?.is_none());
 
         drop(db);
         std::fs::remove_file(path).ok();

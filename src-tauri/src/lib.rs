@@ -1,19 +1,23 @@
 mod engine;
+mod file_job;
 mod kwin;
 mod tray;
 
+use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use pickscribe::config::AppConfig;
-use pickscribe::engine::{command_exists, stt};
+use pickscribe::engine::{command_exists, media, stt, transcript};
 use pickscribe::history::{HistoryEntry, Metrics};
 use pickscribe::platform::{self, PlatformSupport};
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_autostart::MacosLauncher;
+use tauri_plugin_dialog::DialogExt;
 
 use engine::{Engine, StatePayload};
 
@@ -188,6 +192,57 @@ mod tests {
             other => panic!("expected wasm debug image, got {other:?}"),
         }
     }
+
+    fn history_entry() -> HistoryEntry {
+        HistoryEntry {
+            id: 42,
+            created_at: 0,
+            duration_ms: 1_000,
+            raw_text: "raw transcript".into(),
+            cleaned_text: Some("clean transcript".into()),
+            provider: "none".into(),
+            model: String::new(),
+            language: "en".into(),
+            source_file: Some("/home/me/meeting.mp4".into()),
+            segments_json: Some(
+                r#"[{"start_ms":0,"end_ms":1000,"text":"First sentence."}]"#.into(),
+            ),
+            word_count: 2,
+        }
+    }
+
+    #[test]
+    fn export_content_uses_cleaned_text_and_timestamped_segments() {
+        let entry = history_entry();
+
+        assert_eq!(export_content(&entry, "txt").unwrap(), "clean transcript");
+        assert_eq!(
+            export_content(&entry, "srt").unwrap(),
+            "1\n00:00:00,000 --> 00:00:01,000\nFirst sentence.\n"
+        );
+        assert_eq!(export_file_name(&entry, "vtt"), "meeting.vtt");
+    }
+
+    #[test]
+    fn timestamped_exports_require_segments() {
+        let mut entry = history_entry();
+        entry.segments_json = None;
+
+        assert_eq!(
+            export_content(&entry, "vtt").unwrap_err(),
+            "no timestamped segments for this entry"
+        );
+        assert_eq!(
+            export_file_name(
+                &HistoryEntry {
+                    source_file: None,
+                    ..entry
+                },
+                "txt"
+            ),
+            "transcript-42.txt"
+        );
+    }
 }
 
 #[tauri::command]
@@ -261,6 +316,110 @@ fn clear_history(engine: State<'_, Arc<Engine>>) -> CommandResult<()> {
 }
 
 #[tauri::command]
+fn transcribe_media_file(
+    app: AppHandle,
+    engine: State<'_, Arc<Engine>>,
+    path: String,
+    cleanup: bool,
+) -> CommandResult<()> {
+    file_job::start(Arc::clone(engine.inner()), app, path, cleanup).map_err(err_string)
+}
+
+#[tauri::command]
+fn cancel_file_transcription(engine: State<'_, Arc<Engine>>) -> CommandResult<()> {
+    file_job::cancel(engine.inner());
+    Ok(())
+}
+
+#[tauri::command]
+async fn pick_media_file(app: AppHandle) -> CommandResult<Option<String>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("Media", media::MEDIA_EXTENSIONS)
+            .blocking_pick_file()
+            .map(|path| {
+                path.into_path()
+                    .map(|path| path.display().to_string())
+                    .map_err(err_string)
+            })
+            .transpose()
+    })
+    .await
+    .map_err(err_string)?
+}
+
+#[tauri::command]
+async fn export_history_entry(
+    app: AppHandle,
+    engine: State<'_, Arc<Engine>>,
+    id: i64,
+    format: String,
+) -> CommandResult<Option<String>> {
+    let entry = engine
+        .history
+        .get(id)
+        .map_err(err_string)?
+        .ok_or_else(|| format!("history entry not found: {id}"))?;
+    let content = export_content(&entry, &format)?;
+    let file_name = export_file_name(&entry, &format);
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(path) = app
+            .dialog()
+            .file()
+            .add_filter(format.to_ascii_uppercase(), &[format.as_str()])
+            .set_file_name(file_name)
+            .blocking_save_file()
+        else {
+            return Ok(None);
+        };
+        let path = path.into_path().map_err(err_string)?;
+        fs::write(&path, content).map_err(err_string)?;
+        Ok(Some(path.display().to_string()))
+    })
+    .await
+    .map_err(err_string)?
+}
+
+fn export_content(entry: &HistoryEntry, format: &str) -> CommandResult<String> {
+    match format {
+        "txt" => Ok(entry
+            .cleaned_text
+            .as_deref()
+            .filter(|text| !text.trim().is_empty())
+            .unwrap_or(&entry.raw_text)
+            .to_string()),
+        "srt" | "vtt" => {
+            let segments_json = entry
+                .segments_json
+                .as_deref()
+                .ok_or_else(|| "no timestamped segments for this entry".to_string())?;
+            let segments: Vec<transcript::FileSegment> =
+                serde_json::from_str(segments_json).map_err(err_string)?;
+            Ok(if format == "srt" {
+                transcript::to_srt(&segments)
+            } else {
+                transcript::to_vtt(&segments)
+            })
+        }
+        _ => Err(format!("unsupported export format: {format}")),
+    }
+}
+
+fn export_file_name(entry: &HistoryEntry, extension: &str) -> String {
+    let source_name = entry.source_file.as_deref().and_then(|source| {
+        Path::new(source)
+            .file_stem()
+            .and_then(|name| name.to_str())
+    });
+    match source_name.filter(|name| !name.is_empty()) {
+        Some(name) => format!("{name}.{extension}"),
+        None => format!("transcript-{}.{}", entry.id, extension),
+    }
+}
+
+#[tauri::command]
 fn get_metrics(engine: State<'_, Arc<Engine>>) -> CommandResult<Metrics> {
     let cfg = AppConfig::load();
     engine
@@ -294,6 +453,10 @@ fn run_doctor() -> Vec<DoctorCheck> {
         support.dictation_supported,
         support.summary.clone(),
     );
+    match media::resolve_ffmpeg() {
+        Ok(path) => push("ffmpeg", true, path.display().to_string()),
+        Err(err) => push("ffmpeg", false, format!("{err:#}")),
+    }
     for blocker in &support.blockers {
         push(&blocker.name, false, blocker.detail.clone());
     }
@@ -674,6 +837,7 @@ pub fn run() {
         .manage(engine)
         .plugin(sentry_plugin)
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_autostart::init(
@@ -699,6 +863,10 @@ pub fn run() {
             list_history,
             delete_history_entry,
             clear_history,
+            transcribe_media_file,
+            cancel_file_transcription,
+            pick_media_file,
+            export_history_entry,
             get_metrics,
             run_doctor,
             list_models,

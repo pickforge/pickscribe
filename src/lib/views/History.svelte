@@ -1,6 +1,8 @@
 <script lang="ts">
   import Copy from "phosphor-svelte/lib/Copy";
   import Check from "phosphor-svelte/lib/Check";
+  import DownloadSimple from "phosphor-svelte/lib/DownloadSimple";
+  import FileAudio from "phosphor-svelte/lib/FileAudio";
   import Trash from "phosphor-svelte/lib/Trash";
   import MagnifyingGlass from "phosphor-svelte/lib/MagnifyingGlass";
   import CaretDown from "phosphor-svelte/lib/CaretDown";
@@ -10,8 +12,10 @@
     formatDuration,
     formatError,
     formatTimestamp,
+    type ExportFormat,
     type HistoryEntry,
   } from "../api";
+  import { basename, exportFormats } from "../file-transcribe";
 
   let { historyVersion }: { historyVersion: number } = $props();
 
@@ -21,6 +25,7 @@
   let loaded = $state(false);
   let expanded = $state<Set<number>>(new Set());
   let copiedId = $state<string | null>(null);
+  let exportedId = $state<string | null>(null);
   let confirmClear = $state(false);
 
   $effect(() => {
@@ -62,6 +67,18 @@
       await api.copyText(text);
       copiedId = `${entry.id}-${kind}`;
       setTimeout(() => (copiedId = null), 1500);
+    } catch (err) {
+      error = formatError(err);
+    }
+  }
+
+  async function exportEntry(entry: HistoryEntry, format: ExportFormat) {
+    try {
+      const saved = await api.exportHistoryEntry(entry.id, format);
+      if (saved) {
+        exportedId = `${entry.id}-${format}`;
+        setTimeout(() => (exportedId = null), 1500);
+      }
     } catch (err) {
       error = formatError(err);
     }
@@ -144,8 +161,33 @@
               {:else}
                 <span class="pill">RAW ONLY</span>
               {/if}
+              {#if entry.source_file}
+                <span class="pill file-pill" title={entry.source_file}>
+                  <FileAudio size={11} weight="regular" />
+                  {basename(entry.source_file)}
+                </span>
+              {/if}
             </div>
             <div class="entry-actions">
+              <div class="export-group" role="group" aria-label="Export transcript">
+                <DownloadSimple size={13} />
+                {#each exportFormats(entry) as fmt (fmt.format)}
+                  <button
+                    type="button"
+                    class="export-chip"
+                    class:saved={exportedId === `${entry.id}-${fmt.format}`}
+                    disabled={!fmt.enabled}
+                    title={fmt.enabled
+                      ? `Export as ${fmt.format.toUpperCase()}`
+                      : "No timestamps to export for this entry"}
+                    onclick={() => exportEntry(entry, fmt.format)}
+                  >
+                    {exportedId === `${entry.id}-${fmt.format}`
+                      ? "Saved"
+                      : fmt.format.toUpperCase()}
+                  </button>
+                {/each}
+              </div>
               <button
                 type="button"
                 class="btn btn-ghost btn-sm"
@@ -291,6 +333,62 @@
     align-items: center;
     gap: 4px;
     flex: none;
+  }
+
+  .file-pill {
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .file-pill :global(svg) {
+    flex: none;
+  }
+
+  .export-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+    padding-right: 4px;
+    margin-right: 2px;
+    color: var(--muted);
+    border-right: 1px solid var(--hairline);
+  }
+  .export-group > :global(svg) {
+    margin-right: 3px;
+  }
+
+  .export-chip {
+    border: none;
+    background: transparent;
+    border-radius: 7px;
+    padding: 5px 7px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    cursor: pointer;
+    transition:
+      color 0.3s var(--ease-forge),
+      background 0.3s var(--ease-forge);
+  }
+  .export-chip:hover:not(:disabled) {
+    color: var(--ember);
+    background: var(--wash);
+  }
+  .export-chip:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .export-chip.saved {
+    color: var(--ok);
+  }
+  .export-chip:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--ember) 55%, transparent);
+    outline-offset: 1px;
   }
 
   .icon-btn {

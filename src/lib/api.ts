@@ -1,6 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export type Stage = "idle" | "recording" | "transcribing" | "cleaning" | "pasting";
+
+export type FileStage =
+  | "converting"
+  | "transcribing"
+  | "cleaning"
+  | "done"
+  | "error"
+  | "cancelled";
+
+export type ExportFormat = "txt" | "srt" | "vtt";
 
 export type TranscriptSegmentStatus =
   | "recording"
@@ -20,7 +31,17 @@ export interface HistoryEntry {
   provider: string;
   model: string;
   language: string;
+  source_file: string | null;
+  segments_json: string | null;
   word_count: number;
+}
+
+export interface FileJobState {
+  stage: FileStage;
+  progress: number;
+  source_file: string;
+  error: string | null;
+  entry_id: number | null;
 }
 
 export interface TranscriptSegment {
@@ -149,12 +170,23 @@ export const api = {
   toggleFloatButton: () => invoke<boolean>("toggle_float_button"),
   getSystemTheme: () => invoke<string>("get_system_theme"),
   copyText: (text: string) => invoke<void>("copy_text", { text }),
+  transcribeMediaFile: (path: string, cleanup: boolean) =>
+    invoke<void>("transcribe_media_file", { path, cleanup }),
+  cancelFileTranscription: () => invoke<void>("cancel_file_transcription"),
+  pickMediaFile: () => invoke<string | null>("pick_media_file"),
+  exportHistoryEntry: (id: number, format: ExportFormat) =>
+    invoke<string | null>("export_history_entry", { id, format }),
 };
 
 export const EVENT_STATE = "pickscribe://state";
 export const EVENT_LEVEL = "pickscribe://level";
 export const EVENT_HISTORY = "pickscribe://history";
 export const EVENT_CONFIG = "pickscribe://config";
+export const EVENT_FILE = "pickscribe://file";
+
+export function onFileJob(handler: (state: FileJobState) => void): Promise<UnlistenFn> {
+  return listen<FileJobState>(EVENT_FILE, (event) => handler(event.payload));
+}
 
 export function formatDuration(ms: number): string {
   const totalSecs = Math.round(ms / 1000);

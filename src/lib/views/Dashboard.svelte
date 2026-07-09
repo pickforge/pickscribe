@@ -1,4 +1,5 @@
 <script lang="ts">
+  import FileAudio from "phosphor-svelte/lib/FileAudio";
   import Microphone from "phosphor-svelte/lib/Microphone";
   import Stop from "phosphor-svelte/lib/Stop";
   import X from "phosphor-svelte/lib/X";
@@ -20,7 +21,15 @@
     dictation,
     levels,
     historyVersion,
-  }: { dictation: StatePayload; levels: number[]; historyVersion: number } = $props();
+    fileBusy,
+    onBrowseFile,
+  }: {
+    dictation: StatePayload;
+    levels: number[];
+    historyVersion: number;
+    fileBusy: boolean;
+    onBrowseFile: () => void;
+  } = $props();
 
   let metrics = $state<Metrics | null>(null);
   let metricsError = $state<string | null>(null);
@@ -175,6 +184,21 @@
       </div>
     </div>
   </div>
+
+  <button
+    type="button"
+    class="file-drop"
+    onclick={onBrowseFile}
+    disabled={fileBusy}
+    title={fileBusy
+      ? "A file transcription is already in progress"
+      : "Transcribe an audio or video file"}
+  >
+    <FileAudio size={16} weight="regular" />
+    <span
+      >Drop an audio or video file, or <span class="file-drop-link">browse</span></span
+    >
+  </button>
 
   {#if segments.length > 0}
     <section class="segments card fade-up">
@@ -368,6 +392,46 @@
     border: 3px solid color-mix(in srgb, var(--ember) 25%, transparent);
     border-top-color: var(--ember);
     animation: spin 0.9s linear infinite;
+  }
+
+  .file-drop {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 11px 16px;
+    border: 1px dashed var(--hairline-strong);
+    border-radius: 12px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 13px;
+    letter-spacing: -0.01em;
+    cursor: pointer;
+    transition:
+      border-color 0.3s var(--ease-forge),
+      color 0.3s var(--ease-forge),
+      background 0.3s var(--ease-forge);
+  }
+  .file-drop:hover:not(:disabled) {
+    border-color: color-mix(in srgb, var(--ember) 45%, transparent);
+    color: var(--text);
+    background: color-mix(in srgb, var(--ember) 4%, transparent);
+  }
+  .file-drop:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+  .file-drop:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--ember) 55%, transparent);
+    outline-offset: 2px;
+  }
+  .file-drop :global(svg) {
+    flex: none;
+    color: var(--ember);
+  }
+  .file-drop-link {
+    color: var(--ember);
+    font-weight: 600;
   }
 
   .stage-side {

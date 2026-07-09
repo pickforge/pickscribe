@@ -13,6 +13,7 @@
     EVENT_STATE,
     type StatePayload,
   } from "./lib/api";
+  import FileTranscribe from "./lib/components/FileTranscribe.svelte";
   import ResizeHandles from "./lib/components/ResizeHandles.svelte";
   import Titlebar from "./lib/components/Titlebar.svelte";
   import Dashboard from "./lib/views/Dashboard.svelte";
@@ -38,6 +39,8 @@
   });
   let levels = $state<number[]>(Array(LEVEL_BARS).fill(0));
   let historyVersion = $state(0);
+  let fileBusy = $state(false);
+  let fileActions: { browse: () => void } | null = null;
 
   const navItems: { id: View; label: string; icon: typeof Microphone }[] = [
     { id: "dashboard", label: "Dictate", icon: Microphone },
@@ -171,7 +174,13 @@
 
     <main class="content fade-up">
       {#if view === "dashboard"}
-        <Dashboard {dictation} {levels} {historyVersion} />
+        <Dashboard
+          {dictation}
+          {levels}
+          {historyVersion}
+          {fileBusy}
+          onBrowseFile={() => fileActions?.browse()}
+        />
       {:else if view === "history"}
         <History {historyVersion} />
       {:else}
@@ -190,6 +199,12 @@
     <span class="pf-statusbar-right">© Pickforge · pickforge.dev · MIT</span>
   </footer>
 </div>
+
+<FileTranscribe
+  bindActions={(actions) => (fileActions = actions)}
+  onViewHistory={() => navigate("history")}
+  onBusyChange={(busy) => (fileBusy = busy)}
+/>
 
 {#if pendingView}
   <div class="dialog-backdrop" role="presentation" onclick={() => (pendingView = null)}>
