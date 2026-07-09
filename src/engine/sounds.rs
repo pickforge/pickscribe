@@ -4,7 +4,7 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
 
-use super::command_exists;
+use super::find_command;
 
 const SAMPLE_RATE: u32 = 48_000;
 const VOLUME: f32 = 0.32;
@@ -79,8 +79,8 @@ pub fn play(cue: Cue) {
     std::thread::spawn(move || {
         let Ok(path) = cue_path(&cue) else { return };
         for player in ["pw-play", "paplay", "aplay"] {
-            if command_exists(player) {
-                let _ = Command::new(player)
+            if let Some(program) = find_command(player) {
+                let _ = Command::new(program)
                     .arg(&path)
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())

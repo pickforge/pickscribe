@@ -6,12 +6,12 @@ use anyhow::{Context, Result, bail};
 
 use crate::config::PasteConfig;
 
-use super::command_exists;
+use super::{command_exists, find_command};
 
 pub fn copy_to_clipboard(text: &str) -> Result<()> {
-    if command_exists("wl-copy") {
+    if let Some(wl_copy) = find_command("wl-copy") {
         // wl-copy daemonizes; don't wait on stdout.
-        let mut child = Command::new("wl-copy")
+        let mut child = Command::new(wl_copy)
             .stdin(Stdio::piped())
             .spawn()
             .context("starting wl-copy")?;
@@ -27,8 +27,8 @@ pub fn copy_to_clipboard(text: &str) -> Result<()> {
         ("xclip", vec!["-selection", "clipboard"]),
         ("xsel", vec!["--clipboard", "--input"]),
     ] {
-        if command_exists(cmd) {
-            let mut child = Command::new(cmd)
+        if let Some(program) = find_command(cmd) {
+            let mut child = Command::new(program)
                 .args(&args)
                 .stdin(Stdio::piped())
                 .spawn()
@@ -75,7 +75,7 @@ pub fn deliver(cfg: &PasteConfig, text: &str) -> Result<()> {
 
 fn paste_with_hotkey(chord: &str) -> Result<()> {
     let shift = chord == "ctrl-shift-v";
-    if command_exists("ydotool") {
+    if let Some(ydotool) = find_command("ydotool") {
         // Release every modifier the user may still be holding, then send the chord.
         let mut keys: Vec<&str> = vec![
             "29:0", "97:0", "42:0", "54:0", "56:0", "100:0", "125:0", "126:0",
@@ -85,7 +85,7 @@ fn paste_with_hotkey(chord: &str) -> Result<()> {
         } else {
             keys.extend(["29:1", "47:1", "47:0", "29:0"]);
         }
-        let status = Command::new("ydotool")
+        let status = Command::new(ydotool)
             .arg("key")
             .args(&keys)
             .status()
@@ -95,9 +95,9 @@ fn paste_with_hotkey(chord: &str) -> Result<()> {
         }
         return Ok(());
     }
-    if command_exists("xdotool") {
+    if let Some(xdotool) = find_command("xdotool") {
         let combo = if shift { "ctrl+shift+v" } else { "ctrl+v" };
-        let status = Command::new("xdotool")
+        let status = Command::new(xdotool)
             .args(["key", "--clearmodifiers", combo])
             .status()
             .context("running xdotool")?;
@@ -119,14 +119,14 @@ fn type_text(text: &str) -> Result<()> {
         &["xdotool", "ydotool", "wtype"]
     };
     for tool in order {
-        if !command_exists(tool) {
+        let Some(program) = find_command(tool) else {
             continue;
-        }
+        };
         return match *tool {
-            "ydotool" => pipe_type("ydotool", &["type", "--file", "-"], text),
-            "xdotool" => pipe_type("xdotool", &["type", "--clearmodifiers", "--file", "-"], text),
+            "ydotool" => pipe_type(&program, tool, &["type", "--file", "-"], text),
+            "xdotool" => pipe_type(&program, tool, &["type", "--clearmodifiers", "--file", "-"], text),
             "wtype" => {
-                let status = Command::new("wtype").arg(text).status()?;
+                let status = Command::new(program).arg(text).status()?;
                 if !status.success() {
                     bail!("wtype failed");
                 }
@@ -138,12 +138,12 @@ fn type_text(text: &str) -> Result<()> {
     bail!("no typing tool found (ydotool, xdotool, wtype)")
 }
 
-fn pipe_type(cmd: &str, args: &[&str], text: &str) -> Result<()> {
-    let mut child = Command::new(cmd)
+fn pipe_type(program: &std::path::Path, name: &str, args: &[&str], text: &str) -> Result<()> {
+    let mut child = Command::new(program)
         .args(args)
         .stdin(Stdio::piped())
         .spawn()
-        .with_context(|| format!("starting {cmd}"))?;
+        .with_context(|| format!("starting {name}"))?;
     child
         .stdin
         .take()
@@ -151,7 +151,7 @@ fn pipe_type(cmd: &str, args: &[&str], text: &str) -> Result<()> {
         .write_all(text.as_bytes())?;
     let status = child.wait()?;
     if !status.success() {
-        bail!("{cmd} type failed");
+        bail!("{name} type failed");
     }
     Ok(())
 }

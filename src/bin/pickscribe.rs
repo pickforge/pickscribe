@@ -2295,11 +2295,7 @@ fn find_command(program: &str) -> Option<PathBuf> {
         return path.is_file().then(|| path.to_path_buf());
     }
 
-    env::var_os("PATH").and_then(|paths| {
-        env::split_paths(&paths)
-            .map(|dir| dir.join(program))
-            .find(|candidate| candidate.is_file())
-    })
+    pickscribe::engine::find_command(program)
 }
 
 fn notify(args: &Args, title: &str, body: &str) {
