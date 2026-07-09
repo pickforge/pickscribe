@@ -13,6 +13,9 @@ then reset this file.
   step is off by default for files. Requires `ffmpeg` (new doctor check).
 - File transcriptions are excluded from the dictation metrics (sessions,
   minutes saved).
+- whisper-cli installed in `~/.local/bin` is now found even when the app is
+  launched from the app menu on sessions whose PATH omits that directory
+  (#5).
 
 ## Internal/release changes
 
