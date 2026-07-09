@@ -6,7 +6,13 @@ then reset this file.
 
 ## User-facing changes
 
-- None yet.
+- Transcribe a file: drop an audio or video file onto the app (or browse from
+  the dashboard) to get a transcript from the local whisper.cpp engine, with
+  live progress and cancel. Results land in History marked with the source
+  file and export as TXT, SRT, or VTT. Fully local; the optional AI cleanup
+  step is off by default for files. Requires `ffmpeg` (new doctor check).
+- File transcriptions are excluded from the dictation metrics (sessions,
+  minutes saved).
 
 ## Internal/release changes
 
@@ -21,13 +27,17 @@ then reset this file.
 
 ### Tested
 
-- None yet.
+- `cargo test --workspace` (79), `bun run check`, `bun run test:coverage`
+  (ratchet green) on the file-transcription PRs.
+- ffmpeg conversion flags verified live against WAV/MP3/MP4 samples; whisper
+  `--output-json`/progress format verified against the installed whisper-cli.
 
 ### Not tested yet
 
 - App build.
 - Installer or updater flow.
 - Platform smoke checks.
+- Interactive drag-drop/dialog smoke in a real desktop session.
 
 ### Release blockers
 

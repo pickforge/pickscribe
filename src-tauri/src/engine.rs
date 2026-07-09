@@ -18,6 +18,8 @@ use pickscribe::platform;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::file_job::FileJobControl;
+
 pub const EVENT_STATE: &str = "pickscribe://state";
 pub const EVENT_LEVEL: &str = "pickscribe://level";
 pub const EVENT_HISTORY: &str = "pickscribe://history";
@@ -103,6 +105,7 @@ struct SessionControl {
 pub struct Engine {
     recording: Mutex<Option<ActiveRecording>>,
     active_session: Mutex<Option<SessionControl>>,
+    pub(crate) file_job: Mutex<Option<FileJobControl>>,
     state: Mutex<StatePayload>,
     levels_running: Arc<AtomicBool>,
     /// Paste chord requested by the triggering invocation (e.g. the legacy
@@ -124,6 +127,7 @@ impl Engine {
         Ok(Self {
             recording: Mutex::new(None),
             active_session: Mutex::new(None),
+            file_job: Mutex::new(None),
             state: Mutex::new(StatePayload {
                 stage: Stage::Idle,
                 recording_started_ms: None,
