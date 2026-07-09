@@ -12,6 +12,10 @@ then reset this file.
 
 - Release workflow now strips bundled `libwayland` libraries from AppImage
   builds and re-signs the AppImage before collecting release assets.
+- File-transcription core (PR 1 of 2 for #30): ffmpeg→WAV conversion, whisper
+  segment output with progress, TXT/SRT/VTT formatters, and an additive history
+  DB migration (`source_file`, `segments_json`). No user-facing surface yet;
+  the UI ships in PR 2.
 
 ## Validation
 
