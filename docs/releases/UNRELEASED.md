@@ -10,7 +10,8 @@ then reset this file.
 
 ## Internal/release changes
 
-- None yet.
+- Release workflow now strips bundled `libwayland` libraries from AppImage
+  builds and re-signs the AppImage before collecting release assets.
 
 ## Validation
 
