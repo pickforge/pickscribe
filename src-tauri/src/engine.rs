@@ -615,6 +615,8 @@ impl Engine {
             provider: outcome.provider.clone(),
             model: outcome.model.clone(),
             language: cfg.stt.language.clone(),
+            source_file: None,
+            segments_json: None,
         };
         let last_entry = match self.history.insert(&entry) {
             Ok(id) => {
@@ -628,6 +630,8 @@ impl Engine {
                     provider: entry.provider,
                     model: entry.model,
                     language: entry.language,
+                    source_file: entry.source_file,
+                    segments_json: entry.segments_json,
                     word_count: pickscribe::history::count_words(&outcome.text),
                 })
             }

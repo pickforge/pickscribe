@@ -17,6 +17,8 @@ pub struct HistoryEntry {
     pub provider: String,
     pub model: String,
     pub language: String,
+    pub source_file: Option<String>,
+    pub segments_json: Option<String>,
     pub word_count: i64,
 }
 
@@ -28,6 +30,8 @@ pub struct NewEntry {
     pub provider: String,
     pub model: String,
     pub language: String,
+    pub source_file: Option<String>,
+    pub segments_json: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -82,11 +86,30 @@ impl HistoryDb {
                 provider TEXT NOT NULL DEFAULT '',
                 model TEXT NOT NULL DEFAULT '',
                 language TEXT NOT NULL DEFAULT '',
+                source_file TEXT,
+                segments_json TEXT,
                 word_count INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_transcriptions_created
                 ON transcriptions(created_at DESC);",
         )?;
+        let columns = {
+            let mut statement = conn.prepare("PRAGMA table_info(transcriptions)")?;
+            let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        if !columns.iter().any(|column| column == "source_file") {
+            conn.execute(
+                "ALTER TABLE transcriptions ADD COLUMN source_file TEXT",
+                [],
+            )?;
+        }
+        if !columns.iter().any(|column| column == "segments_json") {
+            conn.execute(
+                "ALTER TABLE transcriptions ADD COLUMN segments_json TEXT",
+                [],
+            )?;
+        }
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -107,8 +130,9 @@ impl HistoryDb {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO transcriptions
-                (created_at, duration_ms, raw_text, cleaned_text, provider, model, language, word_count)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                (created_at, duration_ms, raw_text, cleaned_text, provider, model, language,
+                 source_file, segments_json, word_count)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 now_unix(),
                 entry.duration_ms,
@@ -117,6 +141,8 @@ impl HistoryDb {
                 entry.provider,
                 entry.model,
                 entry.language,
+                entry.source_file,
+                entry.segments_json,
                 words,
             ],
         )?;
@@ -136,13 +162,15 @@ impl HistoryDb {
                 provider: row.get(5)?,
                 model: row.get(6)?,
                 language: row.get(7)?,
-                word_count: row.get(8)?,
+                source_file: row.get(8)?,
+                segments_json: row.get(9)?,
+                word_count: row.get(10)?,
             })
         };
         if search.trim().is_empty() {
             let mut stmt = conn.prepare(
                 "SELECT id, created_at, duration_ms, raw_text, cleaned_text,
-                        provider, model, language, word_count
+                        provider, model, language, source_file, segments_json, word_count
                  FROM transcriptions ORDER BY created_at DESC LIMIT ?1 OFFSET ?2",
             )?;
             let rows = stmt.query_map(params![limit, offset], map_row)?;
@@ -153,7 +181,7 @@ impl HistoryDb {
             let pattern = format!("%{}%", search.trim());
             let mut stmt = conn.prepare(
                 "SELECT id, created_at, duration_ms, raw_text, cleaned_text,
-                        provider, model, language, word_count
+                        provider, model, language, source_file, segments_json, word_count
                  FROM transcriptions
                  WHERE raw_text LIKE ?1 OR cleaned_text LIKE ?1
                  ORDER BY created_at DESC LIMIT ?2 OFFSET ?3",
@@ -259,6 +287,8 @@ mod tests {
             provider: "none".into(),
             model: String::new(),
             language: "en".into(),
+            source_file: None,
+            segments_json: None,
         })?;
         db.insert(&NewEntry {
             duration_ms: 2_000,
@@ -267,6 +297,8 @@ mod tests {
             provider: "ollama".into(),
             model: "qwen".into(),
             language: "en".into(),
+            source_file: None,
+            segments_json: None,
         })?;
 
         let metrics = db.metrics(70)?;
@@ -300,6 +332,8 @@ mod tests {
             provider: "none".into(),
             model: String::new(),
             language: "en".into(),
+            source_file: None,
+            segments_json: None,
         })?;
 
         let metrics = db.metrics(0)?;
@@ -308,6 +342,77 @@ mod tests {
         assert_eq!(metrics.words, 2);
         assert_eq!(metrics.minutes_saved, 1.0);
 
+        std::fs::remove_file(path).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn open_migrates_legacy_schema_and_round_trips_file_fields() -> Result<()> {
+        let path = temp_db_path("history-legacy-media");
+        let conn = Connection::open(&path)?;
+        conn.execute_batch(
+            "CREATE TABLE transcriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at INTEGER NOT NULL,
+                duration_ms INTEGER NOT NULL DEFAULT 0,
+                raw_text TEXT NOT NULL,
+                cleaned_text TEXT,
+                provider TEXT NOT NULL DEFAULT '',
+                model TEXT NOT NULL DEFAULT '',
+                language TEXT NOT NULL DEFAULT '',
+                word_count INTEGER NOT NULL DEFAULT 0
+            );",
+        )?;
+        drop(conn);
+
+        let db = HistoryDb::open(&path)?;
+        let id = db.insert(&NewEntry {
+            duration_ms: 3_200,
+            raw_text: "legacy transcript".into(),
+            cleaned_text: None,
+            provider: "none".into(),
+            model: String::new(),
+            language: "en".into(),
+            source_file: Some("/home/me/recording.mp4".into()),
+            segments_json: Some("[{\"start_ms\":0}]".into()),
+        })?;
+
+        let entries = db.list("", 10, 0)?;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, id);
+        assert_eq!(entries[0].source_file.as_deref(), Some("/home/me/recording.mp4"));
+        assert_eq!(entries[0].segments_json.as_deref(), Some("[{\"start_ms\":0}]"));
+
+        drop(db);
+        std::fs::remove_file(path).ok();
+        Ok(())
+    }
+
+    #[test]
+    fn fresh_database_round_trips_file_fields() -> Result<()> {
+        let path = temp_db_path("history-fresh-media");
+        let db = HistoryDb::open(&path)?;
+        let id = db.insert(&NewEntry {
+            duration_ms: 8_000,
+            raw_text: "file transcript".into(),
+            cleaned_text: Some("clean file transcript".into()),
+            provider: "none".into(),
+            model: "ggml-small.bin".into(),
+            language: "pt".into(),
+            source_file: Some("meeting.webm".into()),
+            segments_json: Some("[{\"start_ms\":0,\"end_ms\":8000}]".into()),
+        })?;
+
+        let entries = db.list("", 10, 0)?;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, id);
+        assert_eq!(entries[0].source_file.as_deref(), Some("meeting.webm"));
+        assert_eq!(
+            entries[0].segments_json.as_deref(),
+            Some("[{\"start_ms\":0,\"end_ms\":8000}]")
+        );
+
+        drop(db);
         std::fs::remove_file(path).ok();
         Ok(())
     }

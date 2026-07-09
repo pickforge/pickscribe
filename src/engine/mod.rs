@@ -2,11 +2,13 @@ pub mod audio_segments;
 pub mod cleanup;
 pub mod incremental;
 pub mod levels;
+pub mod media;
 pub mod paste;
 pub mod recorder;
 pub mod segments;
 pub mod sounds;
 pub mod stt;
+pub mod transcript;
 
 use std::path::PathBuf;
 
