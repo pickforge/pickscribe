@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::Duration;
@@ -6,6 +7,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 
 use crate::config::SttConfig;
+use crate::engine::transcript::{FileSegment, parse_whisper_json};
 
 pub struct WhisperSetup {
     pub program: PathBuf,
@@ -156,6 +158,84 @@ pub fn transcribe_with_cancel(
     Ok(clean_transcript(&raw))
 }
 
+pub fn transcribe_file_with_cancel(
+    cfg: &SttConfig,
+    wav: &Path,
+    is_cancelled: impl Fn() -> bool,
+    on_progress: impl Fn(u8),
+) -> Result<Vec<FileSegment>> {
+    let setup = resolve_whisper(cfg)?;
+    let prefix = wav.with_extension("transcript");
+    let stderr_path = prefix.with_extension("transcript.stderr.log");
+    let stderr_file = fs::File::create(&stderr_path)
+        .with_context(|| format!("creating transcript log {}", stderr_path.display()))?;
+    let mut cmd = Command::new(&setup.program);
+    cmd.arg("--model")
+        .arg(&setup.model)
+        .arg("--file")
+        .arg(wav)
+        .arg("--output-json")
+        .arg("--output-file")
+        .arg(&prefix)
+        .arg("--print-progress")
+        .arg("--no-prints");
+    let language = if cfg.language.is_empty() {
+        "auto"
+    } else {
+        cfg.language.as_str()
+    };
+    cmd.arg("--language").arg(language);
+    cmd.stdout(Stdio::null()).stderr(Stdio::from(stderr_file));
+    let mut child = match cmd.spawn().context("running whisper-cli") {
+        Ok(child) => child,
+        Err(err) => {
+            let _ = fs::remove_file(&stderr_path);
+            return Err(err);
+        }
+    };
+    let mut last_progress = 0;
+    let status: ExitStatus;
+    loop {
+        if is_cancelled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = fs::remove_file(prefix.with_extension("transcript.json"));
+            let _ = fs::remove_file(&stderr_path);
+            bail!("transcription cancelled");
+        }
+        if let Some(progress) = read_log_tail(&stderr_path)
+            .lines()
+            .filter_map(parse_progress_percentage)
+            .max()
+            && progress > last_progress
+        {
+            last_progress = progress;
+            on_progress(progress);
+        }
+        if let Some(exit_status) = child.try_wait()? {
+            status = exit_status;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    if !status.success() {
+        let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+        let _ = fs::remove_file(prefix.with_extension("transcript.json"));
+        let _ = fs::remove_file(&stderr_path);
+        bail!("whisper-cli failed: {}", stderr.trim());
+    }
+
+    let json_path = prefix.with_extension("transcript.json");
+    let raw = fs::read_to_string(&json_path)
+        .with_context(|| format!("reading transcript {}", json_path.display()));
+    let _ = fs::remove_file(&json_path);
+    let _ = fs::remove_file(&stderr_path);
+    let segments = parse_whisper_json(&raw?)?;
+    on_progress(100);
+    Ok(segments)
+}
+
 /// Strip whisper timestamps and non-speech markers like [MUSIC], (laughs).
 pub fn clean_transcript(raw: &str) -> String {
     let mut lines = Vec::new();
@@ -192,4 +272,45 @@ fn shellexpand_home(path: &str) -> String {
         }
     }
     path.to_string()
+}
+
+fn read_log_tail(path: &Path) -> String {
+    let Ok(mut file) = fs::File::open(path) else {
+        return String::new();
+    };
+    let start = file
+        .metadata()
+        .map(|metadata| metadata.len().saturating_sub(16 * 1024))
+        .unwrap_or(0);
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return String::new();
+    }
+    let mut tail = Vec::new();
+    let _ = file.read_to_end(&mut tail);
+    String::from_utf8_lossy(&tail).into_owned()
+}
+
+fn parse_progress_percentage(line: &str) -> Option<u8> {
+    let (_, rest) = line.split_once("progress =")?;
+    let percentage = rest.split_once('%')?.0.trim();
+    percentage
+        .parse::<u8>()
+        .ok()
+        .filter(|percentage| *percentage <= 100)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_whisper_progress_percentages() {
+        assert_eq!(
+            parse_progress_percentage("whisper_print_progress: progress = 42%"),
+            Some(42)
+        );
+        assert_eq!(parse_progress_percentage("progress = 100%"), Some(100));
+        assert_eq!(parse_progress_percentage("progress = 101%"), None);
+        assert_eq!(parse_progress_percentage("no progress here"), None);
+    }
 }
