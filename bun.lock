@@ -14,7 +14,7 @@
         "phosphor-svelte": "^3.1.0",
       },
       "devDependencies": {
-        "@pickforge/tauri-release": "0.1.1",
+        "@pickforge/tauri-release": "^0.3.0",
         "@sveltejs/vite-plugin-svelte": "^6.2.1",
         "@tauri-apps/cli": "^2.9.3",
         "@vitest/coverage-v8": "4.1.9",
@@ -105,7 +105,7 @@
 
     "@pickforge/brand": ["@pickforge/brand@0.2.1", "", { "dependencies": { "@fontsource/geist-mono": "^5.2.8", "@fontsource/geist-sans": "^5.2.5" } }, "sha512-8VASbOUFJKUkb2zVvqto7aPynyICISCMzrh8jMRcvovtKNpzbLMrZ2xS7eeIPQyVs5NRbJ0457Vb0HQC+sIhQQ=="],
 
-    "@pickforge/tauri-release": ["@pickforge/tauri-release@0.1.1", "", { "bin": { "pickforge-tauri-release": "dist/cli.js" } }, "sha512-zfAExyDKX3inV+Po25jkyEEcd4ABqzd3MEajFVttgdjb+TuCu0lfRJUVLJD+D1oqUqqNXUd+pKhHDAgksVyOcg=="],
+    "@pickforge/tauri-release": ["@pickforge/tauri-release@0.3.0", "", { "bin": { "pickforge-tauri-release": "dist/cli.js" } }, "sha512-LTpsp6+zB9WU9eflvWH8tRFGNCJmiQW7ULYNnffQYCgfZ3fSqF33yDBKW38WdXdlyDBEcYpFnYjkw0+YnLob8Q=="],
 
     "@rollup/rollup-android-arm-eabi": ["@rollup/rollup-android-arm-eabi@4.61.1", "", { "os": "android", "cpu": "arm" }, "sha512-JnBB8MdXj45cajvTuO5FmPlvFVJRQgvrz1uSEl3NwqFnReAPGwb8EanbGi4z2nRaqLzjJSv5/JmycoTKlRZxHA=="],
 
