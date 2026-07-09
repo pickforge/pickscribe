@@ -46,7 +46,12 @@ pub fn start(cfg: &SttConfig) -> Result<Recording> {
     } else {
         &cfg.recorder
     };
-    let mut cmd = Command::new(recorder);
+    let program = if recorder.contains('/') {
+        PathBuf::from(recorder)
+    } else {
+        super::find_command(recorder).unwrap_or_else(|| PathBuf::from(recorder))
+    };
+    let mut cmd = Command::new(program);
     cmd.arg("--media-category")
         .arg("Capture")
         .arg("--media-role")

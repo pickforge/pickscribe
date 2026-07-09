@@ -8,7 +8,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use pickscribe::engine::{command_exists, find_command};
+use pickscribe::engine::find_command;
 
 const RULE_GROUP: &str = "pickscribe-float-keep-above";
 const FLOAT_TITLE: &str = "PickScribe Float";
@@ -52,20 +52,20 @@ pub fn ensure_float_rule() {
         return;
     }
 
-    let Some(write_tool) = ["kwriteconfig6", "kwriteconfig5"]
+    let Some((write_tool_name, write_tool)) = ["kwriteconfig6", "kwriteconfig5"]
         .into_iter()
-        .find(|t| command_exists(t))
+        .find_map(|t| find_command(t).map(|path| (t, path)))
     else {
         return;
     };
-    let read_tool = if write_tool == "kwriteconfig6" {
+    let read_tool = if write_tool_name == "kwriteconfig6" {
         "kreadconfig6"
     } else {
         "kreadconfig5"
     };
 
     let write = |key: &str, value: &str| {
-        let _ = Command::new(write_tool)
+        let _ = Command::new(&write_tool)
             .args([
                 "--file",
                 "kwinrulesrc",
@@ -103,7 +103,7 @@ pub fn ensure_float_rule() {
     write("positionrule", "3");
 
     // Register the rule group in the [General] rules list (Plasma 6 format).
-    if !already_registered && find_command(read_tool).is_some() {
+    if !already_registered && let Some(read_tool) = find_command(read_tool) {
         let existing = Command::new(read_tool)
             .args(["--file", "kwinrulesrc", "--group", "General", "--key", "rules"])
             .output()
@@ -115,7 +115,7 @@ pub fn ensure_float_rule() {
         } else {
             format!("{existing},{RULE_GROUP}")
         };
-        let _ = Command::new(write_tool)
+        let _ = Command::new(&write_tool)
             .args([
                 "--file",
                 "kwinrulesrc",
