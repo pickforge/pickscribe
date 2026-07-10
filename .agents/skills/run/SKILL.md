@@ -18,9 +18,11 @@ Each lab starts from an empty, safe profile; anything outside HOME/XDG isolation
 One lab per checkout: state lives in `$PWD/.lab.env`, so concurrent labs need separate worktrees. Prepare the profile:
 ```bash
 set -e
+[ ! -f "$PWD/.lab.env" ] || { echo "lab state exists — clean up the previous lab first" >&2; false; }
 bun install --frozen-lockfile
 command -v ss >/dev/null || { echo "ss (iproute2) required" >&2; false; }
 REAL_HOME=$HOME; LAB_HOME=$(mktemp -d /tmp/pickscribe-lab-home.XXXX)
+mkdir -m 700 "$LAB_HOME/runtime"
 for n in $(seq 90 120); do [ ! -e "/tmp/.X11-unix/X$n" ] && DISPLAY_NUM=$n && break; done
 : "${DISPLAY_NUM:?No free X display in 90-120}"
 for candidate in {1421..1439}; do ! ss -ltnH "sport = :$candidate" | grep -q . && { PORT=$candidate; break; }; done
@@ -42,10 +44,10 @@ for _ in {1..50}; do [ -e "/tmp/.X11-unix/X$DISPLAY_NUM" ] && break; sleep 0.1; 
 setsid xfwm4 --display=":$DISPLAY_NUM" --compositor=off </dev/null >"/tmp/pickscribe-xfwm-$DISPLAY_NUM.log" 2>&1 &
 setsid dbus-run-session -- env -u WAYLAND_DISPLAY -u DEEPSEEK_API_KEY -u OPENAI_API_KEY -u OLLAMA_API_KEY -u PICKSCRIBE_API_KEY GDK_BACKEND=x11 DISPLAY=":$DISPLAY_NUM" \
   HOME="$LAB_HOME" XDG_CONFIG_HOME="$LAB_HOME/.config" XDG_DATA_HOME="$LAB_HOME/.local/share" XDG_CACHE_HOME="$LAB_HOME/.cache" \
-  PICKSCRIBE_STATE_DIR="$LAB_HOME/state" CARGO_HOME="$REAL_HOME/.cargo" RUSTUP_HOME="$REAL_HOME/.rustup" \
+  XDG_RUNTIME_DIR="$LAB_HOME/runtime" PICKSCRIBE_STATE_DIR="$LAB_HOME/state" CARGO_HOME="$REAL_HOME/.cargo" RUSTUP_HOME="$REAL_HOME/.rustup" \
   bun run tauri dev --config '{"identifier":"com.pickforge.pickscribe.labtest'"$DISPLAY_NUM"'","build":{"devUrl":"http://127.0.0.1:'"$PORT"'","beforeDevCommand":""}}' </dev/null >"/tmp/pickscribe-lab-$DISPLAY_NUM.log" 2>&1 &
 ```
-GDK otherwise prefers Wayland: `DISPLAY=:N` alone can open on the live desktop. The private D-Bus session isolates the tray; `REAL_HOME` preserves Cargo and Rustup. The identifier suffix (`.labtest$DISPLAY_NUM`) avoids the live app AND other agents' concurrent labs — two labs on one identifier ping each other and the second exits. The seeded config disables cloud cleanup and paste-through—never test dictation paste-through against the real session.
+GDK otherwise prefers Wayland: `DISPLAY=:N` alone can open on the live desktop. The private D-Bus session isolates the tray; `REAL_HOME` preserves Cargo and Rustup. The identifier suffix (`.labtest$DISPLAY_NUM`) avoids the live app AND other agents' concurrent labs — two labs on one identifier ping each other and the second exits. The seeded config disables cloud cleanup and typing; `method = "none"` still copies to a clipboard, but the private `XDG_RUNTIME_DIR` keeps `wl-copy` (default-socket lookup) and `ydotool` off the real session — clipboard writes land only on the lab display. Never test dictation paste-through against the real session.
 
 Basic boot needs no real-profile files. To test dictation, opt in to model and whisper-cli access before launch:
 ```bash
@@ -71,7 +73,9 @@ find "$LAB_HOME" -maxdepth 5 -type f
 
 Find each PID first with `pgrep -f` (bracketed patterns avoid matching the search). Confirm the app PID has `$LAB_HOME` in its environment before killing it:
 ```bash
+[ -f "$PWD/.lab.env" ] || { echo "no lab state in this checkout" >&2; false; }
 source "$PWD/.lab.env"
+: "${PORT:?}" "${DISPLAY_NUM:?}" "${LAB_HOME:?}"
 pgrep -af "$PWD/target/debug/[p]ickscribe-app"
 tr '\0' '\n' < /proc/<lab-app-pid>/environ | grep -qF "$LAB_HOME" || { echo "not the lab app" >&2; false; }
 bash -lc 'kill <lab-app-pid>'
