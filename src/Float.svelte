@@ -14,6 +14,10 @@
 
   const LEVEL_BARS = 24;
 
+  // Non-Linux has no input-shape equivalent for the glow margin, so the
+  // window stays snug there and the outer glow is dropped (see lib.rs).
+  const hasGlowMargin = /\bLinux\b/.test(navigator.userAgent);
+
   let stage = $state<Stage>("idle");
   let levels = $state<number[]>(Array(LEVEL_BARS).fill(0));
 
@@ -78,6 +82,7 @@
 
 <div
   class="capsule"
+  class:snug={!hasGlowMargin}
   class:recording={stage === "recording"}
   class:busy
   role="button"
@@ -124,6 +129,15 @@
     -webkit-user-select: none;
     overflow: hidden;
     transition: border-color 500ms var(--ease-forge), box-shadow 500ms var(--ease-forge);
+  }
+  .capsule.snug {
+    width: calc(100vw - 4px);
+    height: calc(100vh - 4px);
+    margin: 2px;
+  }
+  .capsule.snug,
+  .capsule.snug.recording {
+    box-shadow: none;
   }
   .capsule:hover {
     border-color: color-mix(in srgb, var(--ember) 40%, transparent);
