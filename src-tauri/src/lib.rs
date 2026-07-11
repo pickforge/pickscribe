@@ -621,12 +621,17 @@ fn fix_csd_titlebar_input(window: &tauri::WebviewWindow) {
 }
 
 // Shared Pickforge float-capsule geometry (kept in sync with PickGauge).
-// The glow margin gives the capsule's box-shadow room to fade out inside the
-// window; the input shape below keeps that transparent ring click-through.
-// Float.svelte's capsule margin must match FLOAT_GLOW_MARGIN.
+// On Linux the glow margin gives the capsule's box-shadow room to fade out
+// inside the window, and the GTK input shape below keeps that transparent
+// ring click-through. Other platforms have no input-shape equivalent, so
+// they keep a snug window (and Float.svelte drops the outer glow there).
+// Float.svelte's capsule margin must match FLOAT_GLOW_MARGIN per platform.
 const FLOAT_CAPSULE_WIDTH: i32 = 204;
 const FLOAT_CAPSULE_HEIGHT: i32 = 56;
+#[cfg(target_os = "linux")]
 const FLOAT_GLOW_MARGIN: i32 = 24;
+#[cfg(not(target_os = "linux"))]
+const FLOAT_GLOW_MARGIN: i32 = 2;
 const FLOAT_WINDOW_WIDTH: i32 = FLOAT_CAPSULE_WIDTH + 2 * FLOAT_GLOW_MARGIN;
 const FLOAT_WINDOW_HEIGHT: i32 = FLOAT_CAPSULE_HEIGHT + 2 * FLOAT_GLOW_MARGIN;
 
