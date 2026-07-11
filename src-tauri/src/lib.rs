@@ -621,8 +621,14 @@ fn fix_csd_titlebar_input(window: &tauri::WebviewWindow) {
 }
 
 // Shared Pickforge float-capsule geometry (kept in sync with PickGauge).
-const FLOAT_WINDOW_WIDTH: i32 = 208;
-const FLOAT_WINDOW_HEIGHT: i32 = 60;
+// The glow margin gives the capsule's box-shadow room to fade out inside the
+// window; the input shape below keeps that transparent ring click-through.
+// Float.svelte's capsule margin must match FLOAT_GLOW_MARGIN.
+const FLOAT_CAPSULE_WIDTH: i32 = 204;
+const FLOAT_CAPSULE_HEIGHT: i32 = 56;
+const FLOAT_GLOW_MARGIN: i32 = 24;
+const FLOAT_WINDOW_WIDTH: i32 = FLOAT_CAPSULE_WIDTH + 2 * FLOAT_GLOW_MARGIN;
+const FLOAT_WINDOW_HEIGHT: i32 = FLOAT_CAPSULE_HEIGHT + 2 * FLOAT_GLOW_MARGIN;
 
 pub(crate) fn ensure_float_window(app: &AppHandle, visible: bool) {
     if let Some(window) = app.get_webview_window("float") {
@@ -689,6 +695,17 @@ fn clamp_float_window_size(window: &tauri::WebviewWindow) {
                     child.set_size_request(FLOAT_WINDOW_WIDTH, FLOAT_WINDOW_HEIGHT);
                 }
                 gtk_window.resize(FLOAT_WINDOW_WIDTH, FLOAT_WINDOW_HEIGHT);
+                if let Some(gdk_window) = gtk_window.window() {
+                    // 2px slack so the capsule border stays clickable.
+                    let rect = gtk::cairo::RectangleInt::new(
+                        FLOAT_GLOW_MARGIN - 2,
+                        FLOAT_GLOW_MARGIN - 2,
+                        FLOAT_CAPSULE_WIDTH + 4,
+                        FLOAT_CAPSULE_HEIGHT + 4,
+                    );
+                    let region = gtk::cairo::Region::create_rectangle(&rect);
+                    gdk_window.input_shape_combine_region(&region, 0, 0);
+                }
             }
         });
     }
