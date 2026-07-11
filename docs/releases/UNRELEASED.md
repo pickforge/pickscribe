@@ -16,6 +16,9 @@ then reset this file.
 - whisper-cli installed in `~/.local/bin` is now found even when the app is
   launched from the app menu on sessions whose PATH omits that directory
   (#5).
+- The float capsule's glow now fades out smoothly instead of being clipped
+  into a hard rectangle by the window edge; the transparent margin around
+  the capsule is click-through (#38).
 
 ## Internal/release changes
 
