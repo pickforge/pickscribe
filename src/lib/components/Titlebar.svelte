@@ -1,5 +1,6 @@
 <script lang="ts">
   import { hostPlatform } from "../platform";
+  import { handleTitlebarMouseDown } from "../windowChrome";
   import WindowControls from "./WindowControls.svelte";
 
   let { stage, active }: { stage: string; active: boolean } = $props();
@@ -11,9 +12,10 @@
   class="pf-titlebar"
   class:pf-titlebar--controls-left={controlsLeft}
   class:pf-titlebar--brand-right={controlsLeft}
-  data-tauri-drag-region
+  role="presentation"
+  onmousedown={handleTitlebarMouseDown}
 >
-  <div class="pf-titlebar-left" data-tauri-drag-region>
+  <div class="pf-titlebar-left">
     {#if controlsLeft}
       <WindowControls />
     {:else}
@@ -24,9 +26,9 @@
     {/if}
   </div>
 
-  <div data-tauri-drag-region></div>
+  <div></div>
 
-  <div class="pf-titlebar-right" data-tauri-drag-region>
+  <div class="pf-titlebar-right">
     <span class="pf-pill">
       <span
         class="pf-dot"

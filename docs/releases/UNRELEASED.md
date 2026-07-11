@@ -6,6 +6,7 @@ then reset this file.
 
 ## User-facing changes
 
+- Double-clicking empty titlebar space now maximizes or restores the window.
 - Transcribe a file: drop an audio or video file onto the app (or browse from
   the dashboard) to get a transcript from the local whisper.cpp engine, with
   live progress and cancel. Results land in History marked with the source
@@ -36,6 +37,8 @@ then reset this file.
 
 ### Tested
 
+- `bun run test:coverage` (23 tests) and `bun run check` for the titlebar
+  double-click fix.
 - `cargo test --workspace` (79), `bun run check`, `bun run test:coverage`
   (ratchet green) on the file-transcription PRs.
 - ffmpeg conversion flags verified live against WAV/MP3/MP4 samples; whisper
