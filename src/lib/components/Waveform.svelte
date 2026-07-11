@@ -6,6 +6,21 @@
   }: { levels: number[]; active?: boolean; height?: number } = $props();
 
   let canvas = $state<HTMLCanvasElement | null>(null);
+  // Measured reactively: at float-window startup the GTK size clamp is still
+  // settling, so a one-shot clientWidth read freezes the canvas at the wrong
+  // width until the next levels update.
+  let width = $state(0);
+
+  $effect(() => {
+    const parent = canvas?.parentElement;
+    if (!parent) return;
+    width = parent.clientWidth;
+    const observer = new ResizeObserver(() => {
+      width = parent.clientWidth;
+    });
+    observer.observe(parent);
+    return () => observer.disconnect();
+  });
 
   function channels(varName: string, fallback: string): string {
     const value = getComputedStyle(document.documentElement)
@@ -18,9 +33,7 @@
 
   $effect(() => {
     const el = canvas;
-    if (!el) return;
-    const parent = el.parentElement;
-    const width = parent ? parent.clientWidth : 200;
+    if (!el || width === 0) return;
     const dpr = window.devicePixelRatio || 1;
     el.width = width * dpr;
     el.height = height * dpr;

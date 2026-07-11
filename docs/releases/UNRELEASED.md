@@ -20,6 +20,9 @@ then reset this file.
   into a hard rectangle by the window edge; the transparent margin around
   the capsule is click-through (#38).
 
+- The float capsule's idle waveform no longer renders with stretched dashes
+  on some app starts; it now re-measures itself as the window settles (#41).
+
 ## Internal/release changes
 
 - Release workflow now strips bundled `libwayland` libraries from AppImage
