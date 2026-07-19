@@ -967,37 +967,6 @@ fn growing_audio_duration_ms(path: &Path) -> anyhow::Result<u64> {
     Ok(samples.saturating_mul(1_000) / audio_segments::SAMPLE_RATE_HZ as u64)
 }
 
-fn choose_segment_end(
-    audio_path: &Path,
-    next_start_ms: u64,
-    desired_end_ms: u64,
-    available_ms: u64,
-    final_requested: bool,
-) -> u64 {
-    if final_requested {
-        return available_ms;
-    }
-
-    let radius_ms = 500;
-    let scan_start_ms = desired_end_ms.saturating_sub(radius_ms).max(next_start_ms);
-    let scan_end_ms = desired_end_ms.saturating_add(radius_ms).min(available_ms);
-    let Ok(samples) = audio_segments::read_samples(audio_path, scan_start_ms, scan_end_ms) else {
-        return desired_end_ms.min(available_ms);
-    };
-    if samples.is_empty() {
-        return desired_end_ms.min(available_ms);
-    }
-
-    let target_sample =
-        audio_segments::ms_to_sample(desired_end_ms.saturating_sub(scan_start_ms)) as usize;
-    let radius_sample = (audio_segments::ms_to_sample(radius_ms) as usize).min(samples.len());
-    let boundary_sample =
-        audio_segments::find_low_energy_boundary(&samples, target_sample, radius_sample);
-    let boundary_ms =
-        scan_start_ms.saturating_add(audio_segments::sample_to_ms(boundary_sample as u64));
-    boundary_ms.clamp(next_start_ms.saturating_add(250), available_ms)
-}
-
 pub fn engine(app: &AppHandle) -> Arc<Engine> {
     Arc::clone(&*app.state::<Arc<Engine>>())
 }
