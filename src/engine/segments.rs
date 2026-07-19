@@ -113,6 +113,59 @@ pub fn assemble_cleaned_text(segments: &[TranscriptSegment]) -> Option<String> {
     Some(merge_texts(texts))
 }
 
+/// Completed, contiguous incremental work that survives a fallback: the
+/// merged raw text of the finished prefix and the timestamp final
+/// transcription should resume from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SalvagedPrefix {
+    pub raw_text: String,
+    pub resume_from_ms: u64,
+}
+
+/// When the incremental worker cannot finish (slow final segment, backlog
+/// above the cap, cancellation on stop), salvage the finished prefix so the
+/// fallback only re-transcribes the tail instead of the whole recording.
+///
+/// Returns `None` when nothing can be safely preserved: no finished
+/// segments, a failed segment anywhere (its audio range has no text, so a
+/// full re-transcription is required), or finished work after an unfinished
+/// segment (not a contiguous prefix).
+pub fn salvage_completed_prefix(segments: &[TranscriptSegment]) -> Option<SalvagedPrefix> {
+    if segments
+        .iter()
+        .any(|segment| segment.status == TranscriptSegmentStatus::Failed)
+    {
+        return None;
+    }
+    let ordered = ordered_segments(segments);
+    let is_finished = |segment: &TranscriptSegment| {
+        matches!(
+            segment.status,
+            TranscriptSegmentStatus::RawReady
+                | TranscriptSegmentStatus::Cleaning
+                | TranscriptSegmentStatus::Cleaned
+        )
+    };
+    let finished_len = ordered
+        .iter()
+        .take_while(|segment| is_finished(segment))
+        .count();
+    if finished_len == 0 {
+        return None;
+    }
+    if ordered[finished_len..]
+        .iter()
+        .any(|segment| is_finished(segment))
+    {
+        return None;
+    }
+    let finished = &ordered[..finished_len];
+    Some(SalvagedPrefix {
+        raw_text: merge_texts(finished.iter().map(|segment| segment.raw_text.as_str())),
+        resume_from_ms: finished[finished_len - 1].end_ms,
+    })
+}
+
 pub fn merge_texts<'a>(texts: impl IntoIterator<Item = &'a str>) -> String {
     let mut merged: Vec<String> = Vec::new();
     for text in texts {
@@ -305,5 +358,53 @@ mod tests {
     #[test]
     fn cleaned_assembly_is_none_without_cleaned_text() {
         assert_eq!(assemble_cleaned_text(&[segment(1, 0, "raw")]), None);
+    }
+
+    #[test]
+    fn salvage_preserves_finished_prefix_before_unfinished_tail() {
+        let mut pending = segment(3, 10_000, "");
+        pending.status = TranscriptSegmentStatus::Transcribing;
+        let segments = vec![
+            segment(1, 0, "hello there"),
+            segment(2, 5_000, "there friend"),
+            pending,
+        ];
+
+        let salvaged = salvage_completed_prefix(&segments).unwrap();
+
+        assert_eq!(salvaged.raw_text, "hello there friend");
+        assert_eq!(salvaged.resume_from_ms, 10_000);
+    }
+
+    #[test]
+    fn salvage_rejects_failed_segments_and_gaps() {
+        let failed = TranscriptSegment::failed(2, 5_000, 10_000, "boom");
+        assert_eq!(
+            salvage_completed_prefix(&[segment(1, 0, "hello"), failed]),
+            None
+        );
+
+        let mut pending = segment(2, 5_000, "");
+        pending.status = TranscriptSegmentStatus::Transcribing;
+        assert_eq!(
+            salvage_completed_prefix(&[
+                segment(1, 0, "hello"),
+                pending,
+                segment(3, 10_000, "after gap"),
+            ]),
+            None
+        );
+
+        assert_eq!(salvage_completed_prefix(&[]), None);
+    }
+
+    #[test]
+    fn salvage_covers_fully_finished_sessions() {
+        let segments = vec![segment(1, 0, "hello"), segment(2, 5_000, "world")];
+
+        let salvaged = salvage_completed_prefix(&segments).unwrap();
+
+        assert_eq!(salvaged.raw_text, "hello world");
+        assert_eq!(salvaged.resume_from_ms, 10_000);
     }
 }

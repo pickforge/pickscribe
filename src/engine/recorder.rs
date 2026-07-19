@@ -15,15 +15,15 @@ pub struct Recording {
 }
 
 pub fn state_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("PICKSCRIBE_STATE_DIR") {
-        if !dir.is_empty() {
-            return PathBuf::from(dir);
-        }
+    if let Ok(dir) = std::env::var("PICKSCRIBE_STATE_DIR")
+        && !dir.is_empty()
+    {
+        return PathBuf::from(dir);
     }
-    if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR") {
-        if !dir.is_empty() {
-            return PathBuf::from(dir).join("pickscribe");
-        }
+    if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR")
+        && !dir.is_empty()
+    {
+        return PathBuf::from(dir).join("pickscribe");
     }
     let user = std::env::var("USER").unwrap_or_else(|_| "user".into());
     PathBuf::from(format!("/tmp/pickscribe-{user}"))
@@ -74,25 +74,30 @@ pub fn start(cfg: &SttConfig) -> Result<Recording> {
         .spawn()
         .with_context(|| format!("starting recorder `{recorder}`"))?;
 
-    let mut recording = Recording {
+    Ok(Recording {
         child,
         audio_path,
         log_path,
         started: Instant::now(),
-    };
-
-    // Give the recorder a moment; fail fast if it exited immediately.
-    std::thread::sleep(Duration::from_millis(250));
-    if let Ok(Some(status)) = recording.child.try_wait() {
-        let log = fs::read_to_string(&recording.log_path).unwrap_or_default();
-        bail!("recorder exited immediately ({status}): {}", log.trim());
-    }
-    Ok(recording)
+    })
 }
 
 impl Recording {
     pub fn duration_ms(&self) -> u64 {
         self.started.elapsed().as_millis() as u64
+    }
+
+    /// If the recorder process already exited (e.g. bad device, missing
+    /// binary flags), return a description of the failure. Callers poll this
+    /// shortly after `start` — off the UI thread — instead of `start`
+    /// sleeping on the command path.
+    pub fn exit_error(&mut self) -> Option<String> {
+        let status = self.child.try_wait().ok()??;
+        let log = fs::read_to_string(&self.log_path).unwrap_or_default();
+        Some(format!(
+            "recorder exited immediately ({status}): {}",
+            log.trim()
+        ))
     }
 
     /// Stop the recorder gracefully (SIGINT so the WAV header is finalized),
