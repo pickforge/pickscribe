@@ -3,12 +3,14 @@ use clap::{Parser, ValueEnum};
 use pickscribe::{
     config::{AppConfig, IncrementalConfig},
     engine::{
-        audio_segments, cleanup as cleanup_engine,
+        audio_segments, cleanup as cleanup_engine, incremental,
+        incremental::{Control, IncrementalHost, RunResult, SchedulingConfig, SegmentJob},
         segments::{RecordingSession, TranscriptSegment, TranscriptSegmentStatus},
     },
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    cell::Cell,
     env,
     ffi::OsString,
     fs::{self, File, OpenOptions},
@@ -566,26 +568,102 @@ fn run_incremental_worker_command(args: &Args) -> Result<()> {
     Ok(())
 }
 
+/// The CLI worker's [`IncrementalHost`]: a subprocess whose stop/cancel/
+/// abandon signals are files written by the parent `pickscribe` process,
+/// and whose orphan detection watches the parent's recorder pid because
+/// the worker itself has no direct handle on its parent process.
+struct CliIncrementalHost<'a> {
+    args: &'a Args,
+    worker: &'a IncrementalWorkerState,
+    state: &'a RecordingState,
+    state_file: PathBuf,
+    stopping_path: PathBuf,
+    startup_deadline: Instant,
+    saw_state_file: Cell<bool>,
+    cleanup_worker: Option<SegmentCleanupWorker>,
+}
+
+impl IncrementalHost for CliIncrementalHost<'_> {
+    fn control(&self) -> Control {
+        if self.state_file.exists() {
+            self.saw_state_file.set(true);
+        }
+        if self.worker.cancel_path.exists() {
+            return Control::Cancelled;
+        }
+        if self.worker.stop_path.exists() {
+            return Control::Stopping;
+        }
+        if self.stopping_path.exists() {
+            return Control::Continue;
+        }
+        let orphaned = (self.saw_state_file.get() || Instant::now() >= self.startup_deadline)
+            && (!self.state_file.exists() || !pid_alive(self.state.pid));
+        if orphaned {
+            Control::Abandoned
+        } else {
+            Control::Continue
+        }
+    }
+
+    fn keep_audio(&self) -> bool {
+        self.args.keep_audio
+    }
+
+    fn segment_path(&self, segment_id: u64) -> PathBuf {
+        self.worker
+            .temp_dir
+            .join(format!("segment-{segment_id:04}.wav"))
+    }
+
+    fn transcribe(&mut self, job: &SegmentJob) -> Result<String> {
+        transcribe_incremental_segment(self.args, &job.audio_path, || {
+            matches!(self.control(), Control::Abandoned | Control::Cancelled)
+        })
+        .map(|text| cleanup_transcript(&text))
+    }
+
+    fn try_queue_cleanup(&mut self, segment: TranscriptSegment) -> bool {
+        let Some(cleanup_worker) = self.cleanup_worker.as_ref() else {
+            return false;
+        };
+        let Some(jobs_tx) = cleanup_worker.jobs_tx.as_ref() else {
+            return false;
+        };
+        jobs_tx.try_send(segment).is_ok()
+    }
+
+    fn drain_cleanup(&mut self) -> Vec<TranscriptSegment> {
+        let Some(cleanup_worker) = self.cleanup_worker.as_ref() else {
+            return Vec::new();
+        };
+        let mut drained = Vec::new();
+        while let Ok(segment) = cleanup_worker.results_rx.try_recv() {
+            drained.push(segment);
+        }
+        drained
+    }
+
+    fn publish(&mut self, session: &RecordingSession) {
+        let mut session = session.clone();
+        let _ = write_incremental_output(&self.worker.output_path, &mut session, false, false, None);
+    }
+
+    fn cleanup_artifacts(&mut self) {
+        cleanup_incremental_files(self.args, Some(self.worker));
+    }
+}
+
 fn run_incremental_worker_loop(
     args: &Args,
     state: &RecordingState,
     worker: &IncrementalWorkerState,
 ) -> Result<()> {
-    let mut session = RecordingSession::new(worker.session_id.clone());
-    let mut next_start_ms = 0u64;
-    let mut segment_id = 0u64;
-    let mut fallback_required = false;
-    let mut complete = false;
-
     let cfg = incremental_config();
-    let target_ms = cfg.target_ms.max(1_000);
-    let max_ms = cfg.max_ms.max(target_ms);
-    let overlap_ms = cfg.overlap_ms.min(target_ms / 2);
-    let backlog_limit_ms = max_ms.saturating_mul(cfg.max_queue.max(1) as u64);
+    let scheduling_cfg =
+        SchedulingConfig::new(cfg.target_ms, cfg.max_ms, cfg.overlap_ms, cfg.max_queue);
     let state_file = state_path(args)?;
     let stopping_path = incremental_stopping_path(worker);
-    let startup_deadline = Instant::now() + Duration::from_secs(30);
-    let mut saw_state_file = state_file.exists();
     let local_only = AppConfig::load().general.local_only;
     let cleanup_worker = if incremental_segment_cleanup_enabled(args) {
         Some(start_segment_cleanup_worker(
@@ -600,215 +678,46 @@ fn run_incremental_worker_loop(
         None
     };
 
-    write_incremental_output(&worker.output_path, &mut session, false, false, None)?;
+    let mut initial_session = RecordingSession::new(worker.session_id.clone());
+    write_incremental_output(&worker.output_path, &mut initial_session, false, false, None)?;
 
-    while !worker.cancel_path.exists() {
-        drain_segment_cleanup_results(
-            worker,
-            &mut session,
-            cleanup_worker.as_ref(),
-            fallback_required,
-        )?;
-
-        let final_requested = worker.stop_path.exists();
-        let stopping_requested = stopping_path.exists();
-        if state_file.exists() {
-            saw_state_file = true;
-        }
-        if !final_requested
-            && !stopping_requested
-            && (saw_state_file || Instant::now() >= startup_deadline)
-            && (!state_file.exists() || !pid_alive(state.pid))
-        {
-            cleanup_incremental_files(args, Some(worker));
-            return Ok(());
-        }
-        let available_ms = growing_audio_duration_ms(&state.audio_path).unwrap_or(0);
-        if available_ms <= next_start_ms.saturating_add(250) {
-            if final_requested {
-                if available_ms > next_start_ms {
-                    fallback_required = true;
-                } else {
-                    complete = true;
-                }
-                break;
-            }
-            thread::sleep(Duration::from_millis(250));
-            continue;
-        }
-
-        let buffered_ms = available_ms.saturating_sub(next_start_ms);
-        if !final_requested && buffered_ms < target_ms {
-            thread::sleep(Duration::from_millis(250));
-            continue;
-        }
-        if !final_requested && buffered_ms > backlog_limit_ms {
-            fallback_required = true;
-            write_incremental_output(&worker.output_path, &mut session, false, true, None)?;
-            break;
-        }
-        if final_requested && buffered_ms > max_ms {
-            fallback_required = true;
-            write_incremental_output(&worker.output_path, &mut session, false, true, None)?;
-            break;
-        }
-
-        let desired_end_ms = if final_requested {
-            next_start_ms.saturating_add(max_ms).min(available_ms)
-        } else {
-            next_start_ms.saturating_add(target_ms).min(available_ms)
-        };
-        let end_ms = choose_segment_end(
-            &state.audio_path,
-            next_start_ms,
-            desired_end_ms,
-            available_ms,
-            final_requested,
-        );
-        if end_ms <= next_start_ms {
-            if final_requested {
-                fallback_required = available_ms > next_start_ms;
-                complete = !fallback_required;
-                break;
-            }
-            thread::sleep(Duration::from_millis(250));
-            continue;
-        }
-
-        segment_id = segment_id.saturating_add(1);
-        let slice_start_ms = next_start_ms.saturating_sub(overlap_ms);
-        let segment_path = worker.temp_dir.join(format!("segment-{segment_id:04}.wav"));
-        let slice = match audio_segments::slice_wav(
-            &state.audio_path,
-            &segment_path,
-            slice_start_ms,
-            end_ms,
-        ) {
-            Ok(slice) if slice.sample_count > 0 => slice,
-            Ok(_) if final_requested => {
-                fallback_required = available_ms > next_start_ms;
-                complete = !fallback_required;
-                break;
-            }
-            Ok(_) => {
-                thread::sleep(Duration::from_millis(250));
-                continue;
-            }
-            Err(err) if final_requested => {
-                fallback_required = true;
-                session.upsert_segment(TranscriptSegment::failed(
-                    segment_id,
-                    slice_start_ms,
-                    end_ms,
-                    format!("{err:#}"),
-                ));
-                write_incremental_output(&worker.output_path, &mut session, false, true, None)?;
-                break;
-            }
-            Err(_) => {
-                thread::sleep(Duration::from_millis(250));
-                continue;
-            }
-        };
-
-        session.upsert_segment(TranscriptSegment {
-            id: segment_id,
-            start_ms: slice.start_ms,
-            end_ms: slice.end_ms,
-            status: TranscriptSegmentStatus::Transcribing,
-            raw_text: String::new(),
-            cleaned_text: None,
-            error: None,
-        });
-        write_incremental_output(&worker.output_path, &mut session, false, false, None)?;
-
-        let result = transcribe_incremental_segment(args, &segment_path, || {
-            worker.cancel_path.exists()
-                || (!worker.stop_path.exists()
-                    && !stopping_path.exists()
-                    && (saw_state_file || Instant::now() >= startup_deadline)
-                    && (!state_file.exists() || !pid_alive(state.pid)))
-        })
-        .map(|text| cleanup_transcript(&text));
-        if !args.keep_audio {
-            let _ = fs::remove_file(&segment_path);
-        }
-        if worker.cancel_path.exists() {
-            break;
-        }
-
-        match result {
-            Ok(text) => {
-                let raw = TranscriptSegment::raw_ready(
-                    segment_id,
-                    slice.start_ms,
-                    slice.end_ms,
-                    text.clone(),
-                );
-                session.upsert_segment(raw.clone());
-                write_incremental_output(
-                    &worker.output_path,
-                    &mut session,
-                    false,
-                    fallback_required,
-                    None,
-                )?;
-
-                queue_segment_cleanup(
-                    worker,
-                    &mut session,
-                    cleanup_worker.as_ref(),
-                    raw,
-                    fallback_required,
-                )?;
-            }
-            Err(err) => {
-                fallback_required = true;
-                session.upsert_segment(TranscriptSegment::failed(
-                    segment_id,
-                    slice.start_ms,
-                    slice.end_ms,
-                    format!("{err:#}"),
-                ));
-            }
-        }
-        write_incremental_output(
-            &worker.output_path,
-            &mut session,
-            false,
-            fallback_required,
-            None,
-        )?;
-        if fallback_required {
-            break;
-        }
-
-        next_start_ms = slice.end_ms;
-        if final_requested && next_start_ms >= available_ms {
-            complete = true;
-            break;
-        }
-    }
-
-    drain_segment_cleanup_results(
+    let mut host = CliIncrementalHost {
+        args,
         worker,
-        &mut session,
-        cleanup_worker.as_ref(),
-        fallback_required,
-    )?;
-    stop_segment_cleanup_worker(cleanup_worker);
+        state,
+        saw_state_file: Cell::new(state_file.exists()),
+        state_file,
+        stopping_path,
+        startup_deadline: Instant::now() + Duration::from_secs(30),
+        cleanup_worker,
+    };
+
+    let result = incremental::run(
+        &mut host,
+        &state.audio_path,
+        worker.session_id.clone(),
+        scheduling_cfg,
+    );
+
+    stop_segment_cleanup_worker(host.cleanup_worker.take());
 
     if worker.cancel_path.exists() {
         return Ok(());
     }
 
-    write_incremental_output(
-        &worker.output_path,
-        &mut session,
-        complete && !fallback_required,
-        fallback_required,
-        None,
-    )
+    match result {
+        RunResult::Abandoned => Ok(()),
+        RunResult::Finished(outcome) => {
+            let mut session = outcome.session;
+            write_incremental_output(
+                &worker.output_path,
+                &mut session,
+                outcome.complete && !outcome.fallback_required,
+                outcome.fallback_required,
+                None,
+            )
+        }
+    }
 }
 
 fn start_segment_cleanup_worker(
@@ -878,55 +787,6 @@ fn segment_cleanup_cancelled(
         || (!worker.stop_path.exists()
             && !stopping_path.exists()
             && (!state_file.exists() || !pid_alive(recorder_pid)))
-}
-
-fn queue_segment_cleanup(
-    worker: &IncrementalWorkerState,
-    session: &mut RecordingSession,
-    cleanup_worker: Option<&SegmentCleanupWorker>,
-    raw: TranscriptSegment,
-    fallback_required: bool,
-) -> Result<()> {
-    if raw.raw_text.trim().is_empty() {
-        return Ok(());
-    }
-    let Some(cleanup_worker) = cleanup_worker else {
-        return Ok(());
-    };
-
-    let Some(jobs_tx) = cleanup_worker.jobs_tx.as_ref() else {
-        return Ok(());
-    };
-
-    if jobs_tx.try_send(raw.clone()).is_ok() {
-        session.upsert_segment(TranscriptSegment {
-            status: TranscriptSegmentStatus::Cleaning,
-            ..raw
-        });
-        write_incremental_output(&worker.output_path, session, false, fallback_required, None)?;
-    }
-    Ok(())
-}
-
-fn drain_segment_cleanup_results(
-    worker: &IncrementalWorkerState,
-    session: &mut RecordingSession,
-    cleanup_worker: Option<&SegmentCleanupWorker>,
-    fallback_required: bool,
-) -> Result<()> {
-    let Some(cleanup_worker) = cleanup_worker else {
-        return Ok(());
-    };
-
-    let mut changed = false;
-    while let Ok(segment) = cleanup_worker.results_rx.try_recv() {
-        session.upsert_segment(segment);
-        changed = true;
-    }
-    if changed {
-        write_incremental_output(&worker.output_path, session, false, fallback_required, None)?;
-    }
-    Ok(())
 }
 
 fn stop_segment_cleanup_worker(cleanup_worker: Option<SegmentCleanupWorker>) {
