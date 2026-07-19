@@ -140,7 +140,7 @@ jobs:
           name: pickscribe-linux-${{ github.run_number }}
           path: release-assets/
 
-      - name: Create GitHub release
+      - name: Create draft GitHub release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
@@ -157,9 +157,16 @@ jobs:
           EOF
           )"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "Release $RELEASE_TAG already exists; reusing it."
+            is_draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')"
+            if [[ "$is_draft" != "true" ]]; then
+              echo "ERROR: release $RELEASE_TAG is already published; refusing to replace its assets."
+              exit 1
+            fi
+            echo "Draft release $RELEASE_TAG already exists; reusing it."
           else
             gh release create "$RELEASE_TAG" \
+              --draft \
+              --verify-tag \
               --title "PickScribe ${RELEASE_TAG}" \
               --notes "$release_notes" \
               --generate-notes
