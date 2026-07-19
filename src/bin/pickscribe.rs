@@ -1173,20 +1173,13 @@ fn choose_segment_end(
         return desired_end_ms.min(available_ms);
     }
 
-    let target_sample = ms_to_sample(desired_end_ms.saturating_sub(scan_start_ms));
-    let radius_sample = ms_to_sample(radius_ms).min(samples.len());
+    let target_sample = audio_segments::ms_to_sample(desired_end_ms.saturating_sub(scan_start_ms)) as usize;
+    let radius_sample = (audio_segments::ms_to_sample(radius_ms) as usize).min(samples.len());
     let boundary_sample =
         audio_segments::find_low_energy_boundary(&samples, target_sample, radius_sample);
-    let boundary_ms = scan_start_ms.saturating_add(sample_to_ms(boundary_sample as u64));
+    let boundary_ms =
+        scan_start_ms.saturating_add(audio_segments::sample_to_ms(boundary_sample as u64));
     boundary_ms.clamp(next_start_ms.saturating_add(250), available_ms)
-}
-
-fn ms_to_sample(ms: u64) -> usize {
-    (ms.saturating_mul(audio_segments::SAMPLE_RATE_HZ as u64) / 1_000) as usize
-}
-
-fn sample_to_ms(sample: u64) -> u64 {
-    sample.saturating_mul(1_000) / audio_segments::SAMPLE_RATE_HZ as u64
 }
 
 fn transcribe(args: &Args, audio_path: &Path) -> Result<String> {
@@ -1483,13 +1476,13 @@ fn resolve_whisper_command(args: &Args) -> Result<WhisperCommand> {
         });
     }
 
-    if let Some(program) = find_command("whisper.cpp") {
-        if let Some(model) = detect_model_path() {
-            return Ok(WhisperCommand {
-                program,
-                model: Some(model),
-            });
-        }
+    if let Some(program) = find_command("whisper.cpp")
+        && let Some(model) = detect_model_path()
+    {
+        return Ok(WhisperCommand {
+            program,
+            model: Some(model),
+        });
     }
 
     for wrapper in [
@@ -2115,10 +2108,11 @@ fn cleanup_transcript(text: &str) -> String {
     text.lines()
         .map(|line| {
             let trimmed = line.trim();
-            if let Some(end) = trimmed.find(']') {
-                if trimmed.starts_with('[') && trimmed[..=end].contains("-->") {
-                    return trimmed[end + 1..].trim();
-                }
+            if let Some(end) = trimmed.find(']')
+                && trimmed.starts_with('[')
+                && trimmed[..=end].contains("-->")
+            {
+                return trimmed[end + 1..].trim();
             }
             trimmed
         })
