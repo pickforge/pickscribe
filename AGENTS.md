@@ -27,6 +27,8 @@ Repo-local guide for agents working in PickScribe — local dictation for Linux
   widen what leaves the machine without updating README's privacy section.
 - Follow the Pickforge design system: ember `#FF7A1A` accent, Geist/Geist Mono,
   tokens over raw values.
+- When command discovery returns a resolved path, spawn that path instead of the
+  bare command so desktop `PATH` fallbacks keep working.
 
 ## Releasing
 
