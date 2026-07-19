@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use tempfile::NamedTempFile;
 
 pub const DEFAULT_INSTRUCTIONS: &str = "Rewrite this dictated text so it is clean, natural, and ready to paste.\nKeep the original language. If the text is Portuguese, use natural Brazilian Portuguese.\nFix punctuation, grammar, casing, and obvious speech-to-text mistakes.\nDo not add explanations.\nReturn only the final text.";
 
@@ -195,9 +197,28 @@ impl AppConfig {
     }
 
     fn save_to_path(&self, path: &Path) -> Result<()> {
+        self.save_to_path_with(path, |temp, destination| {
+            temp.persist(destination)
+                .map_err(|err| err.error)
+                .context("replacing config.toml")?;
+            Ok(())
+        })
+    }
+
+    fn save_to_path_with(
+        &self,
+        path: &Path,
+        persist: impl FnOnce(NamedTempFile, &Path) -> Result<()>,
+    ) -> Result<()> {
         let raw = toml::to_string_pretty(self)?;
-        fs::write(path, raw).context("writing config.toml")?;
-        Ok(())
+        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        let mut temp = NamedTempFile::new_in(parent).context("creating temporary config file")?;
+        temp.write_all(raw.as_bytes())
+            .context("writing temporary config file")?;
+        temp.as_file()
+            .sync_all()
+            .context("syncing temporary config file")?;
+        persist(temp, path)
     }
 
     /// Resolve the effective API key for the configured provider:
@@ -413,21 +434,35 @@ mod tests {
 
     #[test]
     fn crash_reports_round_trip_through_save_and_load() {
-        let path = std::env::temp_dir().join(format!(
-            "pickscribe-config-test-{}-{}.toml",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
         let mut cfg = AppConfig::default();
         cfg.general.crash_reports = false;
 
         cfg.save_to_path(&path).unwrap();
         let loaded = AppConfig::load_from_path(&path);
-        let _ = fs::remove_file(path);
 
         assert!(!loaded.general.crash_reports);
+    }
+
+    #[test]
+    fn failed_atomic_replace_preserves_existing_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let original = AppConfig::default();
+        original.save_to_path(&path).unwrap();
+        let original_bytes = fs::read(&path).unwrap();
+        let mut replacement = original.clone();
+        replacement.general.local_only = true;
+
+        let error = replacement
+            .save_to_path_with(&path, |_temp, _destination| {
+                anyhow::bail!("simulated rename failure")
+            })
+            .unwrap_err();
+
+        assert!(error.to_string().contains("simulated rename failure"));
+        assert_eq!(fs::read(&path).unwrap(), original_bytes);
+        assert!(!AppConfig::load_from_path(&path).general.local_only);
     }
 }

@@ -1,9 +1,19 @@
 <script lang="ts">
+  import { listen } from "@tauri-apps/api/event";
+  import { onMount } from "svelte";
   import ArrowsClockwise from "phosphor-svelte/lib/ArrowsClockwise";
   import CheckCircle from "phosphor-svelte/lib/CheckCircle";
   import WarningCircle from "phosphor-svelte/lib/WarningCircle";
   import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
-  import { api, desktopApiAvailable, formatError, type AppConfig, type DoctorCheck } from "../api";
+  import {
+    api,
+    desktopApiAvailable,
+    EVENT_CONFIG,
+    formatError,
+    type AppConfig,
+    type DoctorCheck,
+  } from "../api";
+  import { reconcileExternalSettings, shouldApplySaveResponse } from "../settingsMerge";
   import { setTheme, type ThemeSetting } from "../theme";
 
   let {
@@ -25,7 +35,11 @@
   let autostartSupported = $state(true);
   let status = $state<string | null>(null);
   let error = $state<string | null>(null);
+  let externalNotice = $state<string | null>(null);
   let saving = $state(false);
+  let receivedConfigEvent = false;
+  let configEventRevision = 0;
+  let lastOwnSaveJson: string | null = null;
 
   const dirty = $derived(
     config !== null && savedJson !== "" && JSON.stringify($state.snapshot(config)) !== savedJson
@@ -40,20 +54,81 @@
   });
 
   $effect(() => {
+    if (!dirty) externalNotice = null;
+  });
+
+  $effect(() => {
     if (!desktopApiAvailable()) return;
-    api
-      .getAppConfig()
-      .then((c) => {
-        config = c;
-        savedJson = JSON.stringify(c);
-      })
-      .catch((err) => (error = formatError(err)));
     api.listModels().then((m) => (models = m)).catch(() => {});
     refreshDoctor();
     isEnabled()
       .then((enabled) => (autostart = enabled))
       .catch(() => (autostartSupported = false));
   });
+
+  onMount(() => {
+    if (!desktopApiAvailable()) return;
+
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void listen<AppConfig>(EVENT_CONFIG, (event) => {
+      receivedConfigEvent = true;
+      configEventRevision += 1;
+      applyExternalConfig(event.payload);
+    })
+      .then((stop) => {
+        if (!active) {
+          stop();
+          return;
+        }
+        unlisten = stop;
+        loadInitialConfig();
+      })
+      .catch((err) => {
+        if (!active) return;
+        error = formatError(err);
+        loadInitialConfig();
+      });
+
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  });
+
+  function loadInitialConfig() {
+    void api
+      .getAppConfig()
+      .then((loaded) => {
+        if (!receivedConfigEvent) {
+          config = loaded;
+          savedJson = JSON.stringify(loaded);
+        }
+      })
+      .catch((err) => (error = formatError(err)));
+  }
+
+  function applyExternalConfig(incoming: AppConfig) {
+    const incomingJson = JSON.stringify(incoming);
+    if (!config || !savedJson) {
+      config = incoming;
+      savedJson = incomingJson;
+      return;
+    }
+
+    const resolution = reconcileExternalSettings(
+      JSON.parse(savedJson) as AppConfig,
+      $state.snapshot(config) as AppConfig,
+      incoming
+    );
+    config = resolution.config;
+    savedJson = JSON.stringify(resolution.baseline);
+    externalNotice =
+      resolution.keptLocalChanges && incomingJson !== lastOwnSaveJson
+        ? "Settings changed elsewhere. External updates were refreshed; your edits were kept."
+        : null;
+    void setTheme(config.general.theme as ThemeSetting);
+  }
 
   function refreshDoctor() {
     api.runDoctor().then((checks) => (doctor = checks)).catch(() => {});
@@ -64,14 +139,21 @@
     saving = true;
     error = null;
     status = null;
+    const submitted = $state.snapshot(config) as AppConfig;
+    const submittedJson = JSON.stringify(submitted);
+    const eventRevisionAtStart = configEventRevision;
+    lastOwnSaveJson = submittedJson;
     try {
-      config = await api.updateAppConfig($state.snapshot(config) as AppConfig);
-      savedJson = JSON.stringify($state.snapshot(config));
+      const updated = await api.updateAppConfig(submitted);
+      if (shouldApplySaveResponse(eventRevisionAtStart, configEventRevision)) {
+        applyExternalConfig(updated);
+      }
       status = "Settings saved";
       setTimeout(() => (status = null), 2500);
       refreshDoctor();
       return true;
     } catch (err) {
+      lastOwnSaveJson = null;
       error = formatError(err);
       return false;
     } finally {
@@ -84,6 +166,7 @@
     config = JSON.parse(savedJson) as AppConfig;
     void setTheme(config.general.theme as ThemeSetting);
     error = null;
+    externalNotice = null;
   }
 
   async function toggleAutostart() {
@@ -127,7 +210,7 @@
       <h2>Tune PickScribe to your voice</h2>
     </div>
     <div class="head-actions">
-      {#if status}<span class="pill ok">{status}</span>{/if}
+      {#if status}<span class="pill ok" role="status">{status}</span>{/if}
       <button type="button" class="btn btn-primary" onclick={save} disabled={saving || !config}>
         {saving ? "Saving…" : "Save changes"}
       </button>
@@ -135,7 +218,10 @@
   </header>
 
   {#if error}
-    <p class="error-line">{error}</p>
+    <p class="error-line" role="alert">{error}</p>
+  {/if}
+  {#if externalNotice}
+    <p class="external-line" role="status">{externalNotice}</p>
   {/if}
 
   <div class="panel card">
@@ -589,9 +675,17 @@
     gap: 12px;
   }
 
-  .error-line {
+  .error-line,
+  .external-line {
     font-size: 13px;
+  }
+
+  .error-line {
     color: var(--bad);
+  }
+
+  .external-line {
+    color: var(--muted);
   }
 
   .panel {

@@ -1,7 +1,6 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use pickscribe::config::AppConfig;
 use tauri::AppHandle;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -113,10 +112,9 @@ pub fn setup(app: &tauri::App) -> tauri::Result<()> {
             "cancel" => crate::engine::engine(app).cancel(app),
             "show" => crate::focus_main_window(app),
             "float" => {
-                let mut cfg = AppConfig::load();
-                cfg.general.float_button = !cfg.general.float_button;
-                let _ = cfg.save();
-                crate::ensure_float_window(app, cfg.general.float_button);
+                if let Err(err) = crate::settings::toggle_float_button(app) {
+                    eprintln!("failed to toggle floating button: {err}");
+                }
             }
             "quit" => app.exit(0),
             _ => {}
