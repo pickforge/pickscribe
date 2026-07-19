@@ -1,13 +1,17 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, ValueEnum};
-use pickscribe::engine::cleanup::{
-    self as cleanup_engine, CleanupCredentials, CleanupKind, CleanupPolicy, FailurePolicy,
+use pickscribe::engine::{
+    cleanup::{
+        self as cleanup_engine, CleanupCredentials, CleanupKind, CleanupPolicy, FailurePolicy,
+    },
+    paste::{
+        self, DeliveryConfig, DeliveryMethod, PasteChord as EnginePasteChord,
+        TypeBackend as EngineTypeBackend,
+    },
 };
 use std::{
     env,
-    io::{self, IsTerminal, Read, Write},
-    process::{Command, Stdio},
-    time::Duration,
+    io::{self, IsTerminal, Read},
 };
 
 #[derive(Debug, Parser)]
@@ -212,22 +216,15 @@ fn main() -> Result<()> {
         println!("{final_text}");
     }
 
-    let paste_method = effective_paste_method(&args);
-    let needs_clipboard_for_paste = paste_method == PasteMethod::Hotkey;
-
-    if !stdout_only && (!args.no_copy || needs_clipboard_for_paste) {
-        if let Err(err) = copy_to_clipboard(&final_text) {
-            warn(&args, format_args!("clipboard copy failed: {err:#}"));
-        }
+    let delivery = paste::deliver(&delivery_config(&args), &final_text);
+    if let Some(err) = delivery.clipboard_error {
+        warn(&args, format_args!("clipboard copy failed: {err:#}"));
     }
-
-    if !stdout_only && paste_method != PasteMethod::None {
-        if let Err(err) = paste_or_type_text(&args, paste_method, &final_text) {
-            warn(
-                &args,
-                format_args!("inserting text into active window failed: {err:#}"),
-            );
-        }
+    if let Some(err) = delivery.insertion_error {
+        warn(
+            &args,
+            format_args!("inserting text into active window failed: {err:#}"),
+        );
     }
 
     Ok(())
@@ -306,218 +303,34 @@ impl DeepseekThinking {
     }
 }
 
-fn copy_to_clipboard(text: &str) -> Result<()> {
-    if command_exists("wl-copy") {
-        // wl-copy may keep a helper process alive to serve the Wayland clipboard.
-        // Do not wait forever; just feed it the text and let it manage the clipboard.
-        run_with_stdin_no_wait("wl-copy", &[], text)
-    } else if command_exists("xclip") {
-        run_with_stdin("xclip", &["-selection", "clipboard"], text)
-    } else if command_exists("xsel") {
-        run_with_stdin("xsel", &["--clipboard", "--input"], text)
+fn delivery_config(args: &Args) -> DeliveryConfig {
+    let method = if args.stdout_only || args.no_paste {
+        DeliveryMethod::None
     } else {
-        Err(anyhow!(
-            "no clipboard helper found; install wl-clipboard, xclip, or xsel"
-        ))
-    }
-}
-
-fn effective_paste_method(args: &Args) -> PasteMethod {
-    if args.no_paste {
-        return PasteMethod::None;
-    }
-
-    match args.paste_method {
-        PasteMethod::Auto => {
-            if command_exists("ydotool") || command_exists("xdotool") {
-                PasteMethod::Hotkey
-            } else {
-                PasteMethod::Type
-            }
+        match args.paste_method {
+            PasteMethod::Auto => DeliveryMethod::Auto,
+            PasteMethod::Hotkey => DeliveryMethod::Hotkey,
+            PasteMethod::Type => DeliveryMethod::Type,
+            PasteMethod::None => DeliveryMethod::None,
         }
-        method => method,
-    }
-}
-
-fn paste_or_type_text(args: &Args, method: PasteMethod, text: &str) -> Result<()> {
-    if args.paste_delay_ms > 0 {
-        std::thread::sleep(Duration::from_millis(args.paste_delay_ms));
-    }
-
-    match method {
-        PasteMethod::Hotkey => paste_with_hotkey(args),
-        PasteMethod::Type => type_text(args, text),
-        PasteMethod::Auto | PasteMethod::None => Ok(()),
-    }
-}
-
-fn paste_with_hotkey(args: &Args) -> Result<()> {
-    match choose_type_backend(args.type_backend) {
-        Some(TypeBackend::Ydotool) => {
-            // Release common modifiers first. This avoids shortcut keys like
-            // Ctrl+Alt+Space or Ctrl+Shift+C affecting the paste action.
-            // Linux input keycodes: Ctrl=29, Shift=42, V=47, Alt=56,
-            // RightCtrl=97, RightShift=54, RightAlt=100, Meta=125/126.
-            let chord: &[&str] = match args.paste_chord {
-                PasteChord::CtrlV => &[
-                    "key", "29:0", "97:0", "42:0", "54:0", "56:0", "100:0", "125:0", "126:0",
-                    "29:1", "47:1", "47:0", "29:0",
-                ],
-                PasteChord::CtrlShiftV => &[
-                    "key", "29:0", "97:0", "42:0", "54:0", "56:0", "100:0", "125:0", "126:0",
-                    "29:1", "42:1", "47:1", "47:0", "42:0", "29:0",
-                ],
-            };
-            run_status("ydotool", chord)
-        }
-        Some(TypeBackend::Xdotool) => {
-            let chord = match args.paste_chord {
-                PasteChord::CtrlV => "ctrl+v",
-                PasteChord::CtrlShiftV => "ctrl+shift+v",
-            };
-            run_status("xdotool", &["key", "--clearmodifiers", chord])
-        }
-        Some(TypeBackend::Wtype) => Err(anyhow!(
-            "wtype cannot send paste shortcuts; use --paste-method type or install ydotool"
-        )),
-        Some(TypeBackend::Auto | TypeBackend::None) | None => Err(anyhow!(
-            "no paste hotkey backend found; install ydotool for Wayland or xdotool for X11"
-        )),
-    }
-}
-
-fn type_text(args: &Args, text: &str) -> Result<()> {
-    match choose_type_backend(args.type_backend) {
-        Some(TypeBackend::Ydotool) => run_with_stdin("ydotool", &["type", "--file", "-"], text),
-        Some(TypeBackend::Xdotool) => run_with_stdin(
-            "xdotool",
-            &["type", "--clearmodifiers", "--file", "-"],
-            text,
-        ),
-        Some(TypeBackend::Wtype) => run_status("wtype", &[text]),
-        Some(TypeBackend::Auto | TypeBackend::None) | None => Err(anyhow!(
-            "no typing backend found; install ydotool for Wayland, wtype if your compositor supports it, or xdotool for X11"
-        )),
-    }
-}
-
-fn choose_type_backend(requested: TypeBackend) -> Option<TypeBackend> {
-    if requested != TypeBackend::Auto {
-        return (requested != TypeBackend::None).then_some(requested);
-    }
-
-    let wayland = env::var("XDG_SESSION_TYPE")
-        .map(|session| session.eq_ignore_ascii_case("wayland"))
-        .unwrap_or(false);
-
-    let candidates: &[TypeBackend] = if wayland {
-        &[
-            TypeBackend::Ydotool,
-            TypeBackend::Wtype,
-            TypeBackend::Xdotool,
-        ]
-    } else {
-        &[
-            TypeBackend::Xdotool,
-            TypeBackend::Ydotool,
-            TypeBackend::Wtype,
-        ]
     };
 
-    candidates
-        .iter()
-        .copied()
-        .find(|backend| command_exists(backend.command_name()))
-}
-
-impl TypeBackend {
-    fn command_name(self) -> &'static str {
-        match self {
-            TypeBackend::Ydotool => "ydotool",
-            TypeBackend::Wtype => "wtype",
-            TypeBackend::Xdotool => "xdotool",
-            TypeBackend::Auto | TypeBackend::None => "",
-        }
+    DeliveryConfig {
+        method,
+        chord: match args.paste_chord {
+            PasteChord::CtrlV => EnginePasteChord::CtrlV,
+            PasteChord::CtrlShiftV => EnginePasteChord::CtrlShiftV,
+        },
+        delay_ms: args.paste_delay_ms,
+        copy_to_clipboard: !args.stdout_only && !args.no_copy,
+        type_backend: match args.type_backend {
+            TypeBackend::Auto => EngineTypeBackend::Auto,
+            TypeBackend::Ydotool => EngineTypeBackend::Ydotool,
+            TypeBackend::Wtype => EngineTypeBackend::Wtype,
+            TypeBackend::Xdotool => EngineTypeBackend::Xdotool,
+            TypeBackend::None => EngineTypeBackend::None,
+        },
     }
-}
-
-fn run_with_stdin(program: &str, args: &[&str], input: &str) -> Result<()> {
-    let mut child = Command::new(program)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("failed to start {program}"))?;
-
-    child
-        .stdin
-        .take()
-        .context("failed to open child stdin")?
-        .write_all(input.as_bytes())
-        .with_context(|| format!("failed to write to {program} stdin"))?;
-
-    let output = child
-        .wait_with_output()
-        .with_context(|| format!("failed to wait for {program}"))?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(anyhow!(
-            "{program} exited with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ))
-    }
-}
-
-fn run_with_stdin_no_wait(program: &str, args: &[&str], input: &str) -> Result<()> {
-    let mut child = Command::new(program)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .with_context(|| format!("failed to start {program}"))?;
-
-    child
-        .stdin
-        .take()
-        .context("failed to open child stdin")?
-        .write_all(input.as_bytes())
-        .with_context(|| format!("failed to write to {program} stdin"))?;
-
-    Ok(())
-}
-
-fn run_status(program: &str, args: &[&str]) -> Result<()> {
-    let output = Command::new(program)
-        .args(args)
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .with_context(|| format!("failed to start {program}"))?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(anyhow!(
-            "{program} exited with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        ))
-    }
-}
-
-fn command_exists(program: &str) -> bool {
-    if program.is_empty() || program.contains('/') {
-        return false;
-    }
-
-    env::var_os("PATH")
-        .map(|paths| env::split_paths(&paths).any(|dir| dir.join(program).is_file()))
-        .unwrap_or(false)
 }
 
 fn warn(args: &Args, message: std::fmt::Arguments<'_>) {
@@ -532,6 +345,65 @@ mod tests {
 
     fn parse_args(values: &[&str]) -> Args {
         Args::parse_from(values)
+    }
+
+    #[test]
+    fn stdout_only_disables_copy_and_insertion() {
+        let args = parse_args(&["pickscribe-cleanup", "--stdout-only", "hello"]);
+
+        let config = delivery_config(&args);
+
+        assert_eq!(config.method, DeliveryMethod::None);
+        assert!(!config.copy_to_clipboard);
+    }
+
+    #[test]
+    fn no_copy_keeps_explicit_hotkey_for_shared_clipboard_policy() {
+        let args = parse_args(&[
+            "pickscribe-cleanup",
+            "--no-copy",
+            "--paste-method",
+            "hotkey",
+            "hello",
+        ]);
+
+        let config = delivery_config(&args);
+
+        assert_eq!(config.method, DeliveryMethod::Hotkey);
+        assert!(!config.copy_to_clipboard);
+    }
+
+    #[test]
+    fn no_paste_still_allows_default_clipboard_copy() {
+        let args = parse_args(&["pickscribe-cleanup", "--no-paste", "hello"]);
+
+        let config = delivery_config(&args);
+
+        assert_eq!(config.method, DeliveryMethod::None);
+        assert!(config.copy_to_clipboard);
+    }
+
+    #[test]
+    fn delivery_flags_map_chord_delay_and_custom_backend() {
+        let args = parse_args(&[
+            "pickscribe-cleanup",
+            "--paste-method",
+            "type",
+            "--paste-chord",
+            "ctrl-shift-v",
+            "--paste-delay-ms",
+            "275",
+            "--type-backend",
+            "xdotool",
+            "hello",
+        ]);
+
+        let config = delivery_config(&args);
+
+        assert_eq!(config.method, DeliveryMethod::Type);
+        assert_eq!(config.chord, EnginePasteChord::CtrlShiftV);
+        assert_eq!(config.delay_ms, 275);
+        assert_eq!(config.type_backend, EngineTypeBackend::Xdotool);
     }
 
     #[test]

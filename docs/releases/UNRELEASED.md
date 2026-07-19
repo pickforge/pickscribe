@@ -39,6 +39,8 @@ then reset this file.
   after the draft AppImage artifact passes a desktop smoke test.
 - CLI and desktop cleanup now share provider resolution, local-only enforcement,
   prompts, response handling, raw fallback, and conservative segment safety.
+- CLI and desktop dictation now share the Linux clipboard, paste-chord, and
+  typing-backend delivery strategy.
 
 ## Validation
 
@@ -48,6 +50,10 @@ then reset this file.
 - Shared cleanup policy: `cargo test --workspace --locked --all-targets`,
   `bun run build`, and CLI smoke checks for raw output, conservative segments,
   local-only fallback, and strict non-zero exit behavior.
+- Shared Linux delivery: `cargo test --workspace --locked --all-targets`,
+  `bun run build`, and CLI smoke checks for stdout-only, auto-to-type fallback,
+  `~/.local/bin` backends, clipboard-required hotkeys, terminal paste chords,
+  failed-copy suppression, and non-fatal paste failure.
 - v0.2.0 release prep: `cargo check --workspace`, `bun run check`,
   `bun run test`, `bun run test:coverage`,
   `cargo test --workspace --locked --all-targets`, and
