@@ -220,11 +220,11 @@ fn write_header(writer: &mut impl Write, data_len: u32) -> Result<()> {
     Ok(())
 }
 
-fn ms_to_sample(ms: u64) -> u64 {
+pub fn ms_to_sample(ms: u64) -> u64 {
     ms.saturating_mul(SAMPLE_RATE_HZ as u64) / 1_000
 }
 
-fn sample_to_ms(sample: u64) -> u64 {
+pub fn sample_to_ms(sample: u64) -> u64 {
     sample.saturating_mul(1_000) / SAMPLE_RATE_HZ as u64
 }
 

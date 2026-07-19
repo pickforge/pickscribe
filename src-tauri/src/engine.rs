@@ -10,7 +10,7 @@ use pickscribe::engine::{
     incremental::{self, CancelToken},
     levels::LevelMeter,
     paste, recorder,
-    segments::{RecordingSession, TranscriptSegment, TranscriptSegmentStatus},
+    segments::{self, RecordingSession, TranscriptSegment, TranscriptSegmentStatus},
     sounds, stt,
 };
 use pickscribe::history::{HistoryDb, HistoryEntry, NewEntry};
@@ -69,6 +69,17 @@ struct IncrementalDone {
     session: RecordingSession,
     complete: bool,
     fallback_required: bool,
+}
+
+/// Explicit outcome of an incremental session at stop time.
+enum IncrementalResult {
+    /// Every segment finished; use the worker's assembled transcript as-is.
+    Complete(String),
+    /// The worker fell back, but a contiguous prefix of segments finished:
+    /// only the remaining tail needs the final transcription pass.
+    Partial(segments::SalvagedPrefix),
+    /// Nothing usable — the final pass re-transcribes the whole recording.
+    Unavailable,
 }
 
 struct IncrementalWorker {
@@ -330,7 +341,7 @@ impl Engine {
             (None, None)
         };
         *self.recording.lock().unwrap() = Some(ActiveRecording {
-            session_id,
+            session_id: session_id.clone(),
             cancel_token,
             recording,
             incremental,
@@ -351,6 +362,40 @@ impl Engine {
             std::thread::spawn(move || {
                 let done = run_incremental_worker(worker);
                 let _ = done_tx.send(done);
+            });
+        }
+
+        // Recorder warm-up check, off the command thread so toggling stays
+        // responsive: if the recorder exited immediately, surface the error
+        // and tear the session down.
+        {
+            let engine = Arc::clone(self);
+            let check_app = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(250));
+                let err = {
+                    let mut guard = engine.recording.lock().unwrap();
+                    match guard.as_mut() {
+                        Some(active) if active.session_id == session_id => {
+                            active.recording.exit_error()
+                        }
+                        _ => None,
+                    }
+                };
+                let Some(err) = err else {
+                    return;
+                };
+                engine.cancel(&check_app);
+                if AppConfig::load().general.sounds {
+                    sounds::play(sounds::Cue::Error);
+                }
+                engine.set_state(&check_app, |s| {
+                    s.stage = Stage::Idle;
+                    s.recording_started_ms = None;
+                    s.segments.clear();
+                    s.error = Some(err);
+                    s.message = None;
+                });
             });
         }
 
@@ -400,30 +445,34 @@ impl Engine {
             let _ = incremental::cleanup_session_dir(session, cfg.general.keep_audio);
         }
         if let Some(active) = active {
-            let ActiveRecording {
-                cancel_token,
-                recording,
-                incremental,
-                ..
-            } = active;
-            cancel_token.cancel();
-            if let Some(incremental) = incremental {
-                incremental.worker_cancel_token.cancel();
-                incremental.stop_requested.store(true, Ordering::SeqCst);
-                recording.cancel();
-                if incremental
-                    .done_rx
-                    .recv_timeout(Duration::from_secs(2))
-                    .is_err()
-                {
-                    let _ = incremental::cleanup_session_dir(
-                        &incremental.temp_dir,
-                        cfg.general.keep_audio,
-                    );
+            // Drain the recorder and incremental worker off the command
+            // thread: recorder teardown and the worker drain can block for
+            // seconds, and cancel must keep the UI responsive.
+            let keep_audio = cfg.general.keep_audio;
+            std::thread::spawn(move || {
+                let ActiveRecording {
+                    cancel_token,
+                    recording,
+                    incremental,
+                    ..
+                } = active;
+                cancel_token.cancel();
+                if let Some(incremental) = incremental {
+                    incremental.worker_cancel_token.cancel();
+                    incremental.stop_requested.store(true, Ordering::SeqCst);
+                    recording.cancel();
+                    if incremental
+                        .done_rx
+                        .recv_timeout(Duration::from_secs(2))
+                        .is_err()
+                    {
+                        let _ =
+                            incremental::cleanup_session_dir(&incremental.temp_dir, keep_audio);
+                    }
+                } else {
+                    recording.cancel();
                 }
-            } else {
-                recording.cancel();
-            }
+            });
         }
         self.set_state(app, |s| {
             s.stage = Stage::Idle;
@@ -474,36 +523,62 @@ impl Engine {
         })
     }
 
-    fn incremental_raw_text(
+    fn incremental_result(
         &self,
         cfg: &AppConfig,
         active: Option<ActiveIncremental>,
         session_id: &str,
         token: &CancelToken,
-    ) -> Option<String> {
-        let active = active?;
+    ) -> IncrementalResult {
+        let Some(active) = active else {
+            return IncrementalResult::Unavailable;
+        };
         active.stop_requested.store(true, Ordering::SeqCst);
 
         for _ in 0..50 {
             if !self.is_session_current(session_id, token) {
                 active.worker_cancel_token.cancel();
                 let _ = incremental::cleanup_session_dir(&active.temp_dir, cfg.general.keep_audio);
-                return None;
+                return IncrementalResult::Unavailable;
             }
             match active.done_rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(done) if done.complete && !done.fallback_required => {
                     let raw = done.session.final_raw_text();
-                    return (!raw.trim().is_empty()).then_some(raw);
+                    return if raw.trim().is_empty() {
+                        IncrementalResult::Unavailable
+                    } else {
+                        IncrementalResult::Complete(raw)
+                    };
                 }
-                Ok(_) => return None,
+                Ok(done) => {
+                    // Fallback: preserve the finished contiguous prefix when
+                    // valid so the final pass only re-transcribes the tail
+                    // instead of silently discarding all incremental work.
+                    return match segments::salvage_completed_prefix(&done.session.segments) {
+                        Some(prefix) if !prefix.raw_text.trim().is_empty() => {
+                            IncrementalResult::Partial(prefix)
+                        }
+                        _ => IncrementalResult::Unavailable,
+                    };
+                }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => return None,
+                Err(mpsc::RecvTimeoutError::Disconnected) => return IncrementalResult::Unavailable,
             }
         }
 
+        // Drain cap (5s) lapsed: the worker is still busy — typically on a
+        // slow final segment. Salvage the finished prefix from the live
+        // state (the worker publishes segments there as they complete)
+        // instead of silently discarding all incremental work.
         active.worker_cancel_token.cancel();
         let _ = incremental::cleanup_session_dir(&active.temp_dir, cfg.general.keep_audio);
-        None
+        let live_segments = self.state.lock().unwrap().segments.clone();
+        match segments::salvage_completed_prefix(&live_segments) {
+            Some(prefix) if !prefix.raw_text.trim().is_empty() => {
+                IncrementalResult::Partial(prefix)
+            }
+            _ => IncrementalResult::Unavailable,
+        }
     }
 
     fn run_pipeline(self: Arc<Self>, app: &AppHandle, cfg: AppConfig, active: ActiveRecording) {
@@ -541,18 +616,45 @@ impl Engine {
             return;
         }
 
-        let raw = match self.incremental_raw_text(&cfg, incremental, &session_id, &cancel_token) {
-            Some(text) => Ok(text),
-            None => {
+        let raw = match self.incremental_result(&cfg, incremental, &session_id, &cancel_token) {
+            IncrementalResult::Complete(text) => Ok(text),
+            outcome => {
                 if !self.is_session_current(&session_id, &cancel_token) {
                     if !cfg.general.keep_audio {
                         let _ = fs::remove_file(&audio_path);
                     }
                     return;
                 }
-                stt::transcribe_with_cancel(&cfg.stt, &audio_path, || {
-                    !self.is_session_current(&session_id, &cancel_token)
-                })
+                let is_cancelled = || !self.is_session_current(&session_id, &cancel_token);
+                match outcome {
+                    IncrementalResult::Partial(prefix) => {
+                        match slice_fallback_tail(&cfg, &audio_path, &prefix) {
+                            // Recording ended inside the already-transcribed
+                            // prefix — nothing left to transcribe.
+                            Ok(None) => Ok(prefix.raw_text),
+                            Ok(Some(tail_path)) => {
+                                let tail = stt::transcribe_with_cancel(
+                                    &cfg.stt,
+                                    &tail_path,
+                                    is_cancelled,
+                                );
+                                let _ = fs::remove_file(&tail_path);
+                                tail.map(|tail| {
+                                    segments::merge_texts([
+                                        prefix.raw_text.as_str(),
+                                        tail.as_str(),
+                                    ])
+                                })
+                            }
+                            // Tail slicing failed — fall back to the whole
+                            // recording rather than erroring the pipeline.
+                            Err(_) => {
+                                stt::transcribe_with_cancel(&cfg.stt, &audio_path, is_cancelled)
+                            }
+                        }
+                    }
+                    _ => stt::transcribe_with_cancel(&cfg.stt, &audio_path, is_cancelled),
+                }
             }
         };
         let raw = match raw {
@@ -653,6 +755,32 @@ impl Engine {
     }
 }
 
+/// Explicit fallback policy: when the incremental worker cannot finish but a
+/// contiguous prefix of segments completed, slice out only the remaining
+/// tail (with the configured overlap) so the final pass avoids
+/// re-transcribing work that already succeeded. Returns `Ok(None)` when the
+/// recording ends inside the transcribed prefix.
+fn slice_fallback_tail(
+    cfg: &AppConfig,
+    audio_path: &Path,
+    prefix: &segments::SalvagedPrefix,
+) -> anyhow::Result<Option<PathBuf>> {
+    let target_ms = cfg.incremental.target_ms.max(1_000);
+    let overlap_ms = cfg.incremental.overlap_ms.min(target_ms / 2);
+    let available_ms = growing_audio_duration_ms(audio_path)?;
+    if available_ms <= prefix.resume_from_ms {
+        return Ok(None);
+    }
+    let start_ms = prefix.resume_from_ms.saturating_sub(overlap_ms);
+    let tail_path = audio_path.with_extension("tail.wav");
+    let slice = audio_segments::slice_wav(audio_path, &tail_path, start_ms, available_ms)?;
+    if slice.sample_count == 0 {
+        let _ = fs::remove_file(&tail_path);
+        return Ok(None);
+    }
+    Ok(Some(tail_path))
+}
+
 fn final_delivery_status(
     paste_error: Option<String>,
     outcome: &cleanup::CleanupOutcome,
@@ -666,38 +794,6 @@ fn final_delivery_status(
     };
 
     (paste_error, message.into())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn outcome(cleaned: bool, error: Option<&str>) -> cleanup::CleanupOutcome {
-        cleanup::CleanupOutcome {
-            text: "transcript".into(),
-            provider: "ollama".into(),
-            model: "qwen2.5:14b".into(),
-            cleaned,
-            error: error.map(str::to_string),
-        }
-    }
-
-    #[test]
-    fn cleanup_fallback_after_success_is_neutral_status() {
-        let (error, message) = final_delivery_status(None, &outcome(false, Some("model missing")));
-
-        assert_eq!(error, None);
-        assert_eq!(message, "Pasted raw transcript; cleanup unavailable");
-    }
-
-    #[test]
-    fn paste_failure_still_surfaces_as_error() {
-        let (error, message) =
-            final_delivery_status(Some("paste failed".into()), &outcome(false, None));
-
-        assert_eq!(error.as_deref(), Some("paste failed"));
-        assert_eq!(message, "Pasted raw transcript");
-    }
 }
 
 fn run_incremental_worker(worker: IncrementalWorker) -> IncrementalDone {
@@ -1025,22 +1121,47 @@ fn choose_segment_end(
         return desired_end_ms.min(available_ms);
     }
 
-    let target_sample = ms_to_sample(desired_end_ms.saturating_sub(scan_start_ms));
-    let radius_sample = ms_to_sample(radius_ms).min(samples.len());
+    let target_sample = audio_segments::ms_to_sample(desired_end_ms.saturating_sub(scan_start_ms)) as usize;
+    let radius_sample = (audio_segments::ms_to_sample(radius_ms) as usize).min(samples.len());
     let boundary_sample =
         audio_segments::find_low_energy_boundary(&samples, target_sample, radius_sample);
-    let boundary_ms = scan_start_ms.saturating_add(sample_to_ms(boundary_sample as u64));
+    let boundary_ms =
+        scan_start_ms.saturating_add(audio_segments::sample_to_ms(boundary_sample as u64));
     boundary_ms.clamp(next_start_ms.saturating_add(250), available_ms)
-}
-
-fn ms_to_sample(ms: u64) -> usize {
-    (ms.saturating_mul(audio_segments::SAMPLE_RATE_HZ as u64) / 1_000) as usize
-}
-
-fn sample_to_ms(sample: u64) -> u64 {
-    sample.saturating_mul(1_000) / audio_segments::SAMPLE_RATE_HZ as u64
 }
 
 pub fn engine(app: &AppHandle) -> Arc<Engine> {
     Arc::clone(&*app.state::<Arc<Engine>>())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn outcome(cleaned: bool, error: Option<&str>) -> cleanup::CleanupOutcome {
+        cleanup::CleanupOutcome {
+            text: "transcript".into(),
+            provider: "ollama".into(),
+            model: "qwen2.5:14b".into(),
+            cleaned,
+            error: error.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn cleanup_fallback_after_success_is_neutral_status() {
+        let (error, message) = final_delivery_status(None, &outcome(false, Some("model missing")));
+
+        assert_eq!(error, None);
+        assert_eq!(message, "Pasted raw transcript; cleanup unavailable");
+    }
+
+    #[test]
+    fn paste_failure_still_surfaces_as_error() {
+        let (error, message) =
+            final_delivery_status(Some("paste failed".into()), &outcome(false, None));
+
+        assert_eq!(error.as_deref(), Some("paste failed"));
+        assert_eq!(message, "Pasted raw transcript");
+    }
 }

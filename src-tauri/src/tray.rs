@@ -1,3 +1,6 @@
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
 use pickscribe::config::AppConfig;
 use tauri::AppHandle;
 use tauri::menu::{Menu, MenuItem};
@@ -15,10 +18,42 @@ const ICON_RECORDING_LIGHT: &[u8] =
 
 pub const TRAY_ID: &str = "pickscribe-tray";
 
+/// Cached dark-mode probe: probing spawns a `gdbus` subprocess, and tray
+/// sync runs 3-4x per segment during incremental transcription, so the
+/// probe result is reused until the TTL lapses or the frontend reports an
+/// explicit theme event via `refresh_panel_prefers_dark`.
+static PANEL_DARK_CACHE: Mutex<Option<(bool, Instant)>> = Mutex::new(None);
+const PANEL_DARK_TTL: Duration = Duration::from_secs(30);
+
+/// Last icon variant applied to the tray: (is_idle, dark_panel). Used to
+/// skip redundant `set_icon` calls when the stage icon is unchanged.
+static LAST_ICON: Mutex<Option<(bool, bool)>> = Mutex::new(None);
+
 /// Whether the desktop prefers a dark color scheme (light tray strokes).
+/// Serves the cached probe result when it is fresh enough.
+pub(crate) fn panel_prefers_dark() -> bool {
+    if let Ok(cache) = PANEL_DARK_CACHE.lock()
+        && let Some((value, probed_at)) = *cache
+        && probed_at.elapsed() < PANEL_DARK_TTL
+    {
+        return value;
+    }
+    refresh_panel_prefers_dark()
+}
+
+/// Force a fresh probe (used on explicit theme events from the frontend)
+/// and update the cache the tray sync path reads.
+pub(crate) fn refresh_panel_prefers_dark() -> bool {
+    let value = probe_panel_prefers_dark();
+    if let Ok(mut cache) = PANEL_DARK_CACHE.lock() {
+        *cache = Some((value, Instant::now()));
+    }
+    value
+}
+
 /// Asks the XDG settings portal: 0 = no preference, 1 = dark, 2 = light.
 /// Defaults to dark on any failure, matching the original icon set.
-pub(crate) fn panel_prefers_dark() -> bool {
+fn probe_panel_prefers_dark() -> bool {
     let output = std::process::Command::new("gdbus")
         .args([
             "call",
@@ -41,13 +76,12 @@ pub(crate) fn panel_prefers_dark() -> bool {
     }
 }
 
-fn icon_bytes(stage: Stage) -> &'static [u8] {
-    let dark_panel = panel_prefers_dark();
-    match (stage, dark_panel) {
-        (Stage::Idle, true) => ICON_IDLE_DARK,
-        (Stage::Idle, false) => ICON_IDLE_LIGHT,
-        (_, true) => ICON_RECORDING_DARK,
-        (_, false) => ICON_RECORDING_LIGHT,
+fn icon_bytes(idle: bool, dark_panel: bool) -> &'static [u8] {
+    match (idle, dark_panel) {
+        (true, true) => ICON_IDLE_DARK,
+        (true, false) => ICON_IDLE_LIGHT,
+        (false, true) => ICON_RECORDING_DARK,
+        (false, false) => ICON_RECORDING_LIGHT,
     }
 }
 
@@ -63,9 +97,11 @@ pub fn setup(app: &tauri::App) -> tauri::Result<()> {
         &[&toggle_item, &cancel_item, &show_item, &float_item, &quit_item],
     )?;
 
+    let variant = (true, panel_prefers_dark());
+    *LAST_ICON.lock().unwrap() = Some(variant);
     TrayIconBuilder::with_id(TRAY_ID)
         .tooltip("PickScribe — idle")
-        .icon(tauri::image::Image::from_bytes(icon_bytes(Stage::Idle))?)
+        .icon(tauri::image::Image::from_bytes(icon_bytes(variant.0, variant.1))?)
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -113,7 +149,17 @@ pub fn sync(app: &AppHandle, stage: Stage) {
         Stage::Cleaning => "PickScribe — cleaning",
         Stage::Pasting => "PickScribe — pasting",
     };
-    if let Ok(icon) = tauri::image::Image::from_bytes(icon_bytes(stage)) {
+    let variant = (matches!(stage, Stage::Idle), panel_prefers_dark());
+    let changed = {
+        let mut last = LAST_ICON.lock().unwrap();
+        if *last == Some(variant) {
+            false
+        } else {
+            *last = Some(variant);
+            true
+        }
+    };
+    if changed && let Ok(icon) = tauri::image::Image::from_bytes(icon_bytes(variant.0, variant.1)) {
         let _ = tray.set_icon(Some(icon));
     }
     let _ = tray.set_tooltip(Some(tooltip));
