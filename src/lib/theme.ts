@@ -4,6 +4,7 @@ export type ThemeSetting = "system" | "dark" | "light";
 
 let current: ThemeSetting = "system";
 let wired = false;
+let applyRevision = 0;
 
 function apply(resolved: "dark" | "light") {
   document.documentElement.dataset.theme = resolved;
@@ -23,7 +24,9 @@ async function resolveSystem(): Promise<"dark" | "light"> {
 
 export async function setTheme(setting: ThemeSetting): Promise<void> {
   current = setting;
-  apply(setting === "system" ? await resolveSystem() : setting);
+  const revision = ++applyRevision;
+  const resolved = setting === "system" ? await resolveSystem() : setting;
+  if (revision === applyRevision) apply(resolved);
 }
 
 export function initTheme(initial: ThemeSetting): void {

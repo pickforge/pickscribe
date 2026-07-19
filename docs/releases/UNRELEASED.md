@@ -24,6 +24,9 @@ then reset this file.
   avoid intercepting clicks. Its idle waveform also re-measures correctly while
   the window settles.
 - Tray state changes no longer repeatedly spawn desktop-theme probes.
+- Settings now change runtime behavior only after persistence succeeds.
+  Float-button changes from the tray or capsule stay synchronized with an open Settings form
+  without overwriting unrelated unsaved edits.
 
 ## Internal/release changes
 

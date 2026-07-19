@@ -1,14 +1,12 @@
 mod engine;
 mod file_job;
 mod kwin;
+mod settings;
 mod tray;
 
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use pickscribe::config::AppConfig;
 use pickscribe::engine::{command_exists, media, stt, transcript};
@@ -24,17 +22,6 @@ use engine::{Engine, StatePayload};
 type CommandResult<T> = Result<T, String>;
 
 const SENTRY_DSN: &str = "https://241506ecc655d5fdb4c68b69f8b9c548@o4511699702317056.ingest.us.sentry.io/4511699813859328";
-static TELEMETRY_ENABLED: AtomicBool = AtomicBool::new(false);
-static SENTRY_CLIENT: OnceLock<Arc<sentry::Client>> = OnceLock::new();
-static MINIDUMP_GUARD: Mutex<Option<tauri_plugin_sentry::minidump::Handle>> = Mutex::new(None);
-
-fn sentry_enabled(cfg: &AppConfig) -> bool {
-    cfg.general.crash_reports
-        && !cfg.general.local_only
-        && (!cfg!(debug_assertions)
-            || std::env::var("PICKSCRIBE_SENTRY_DEBUG").ok().as_deref() == Some("1"))
-}
-
 fn basename(value: &str) -> String {
     let trimmed = value.trim_end_matches(['/', '\\']);
     trimmed
@@ -260,27 +247,9 @@ fn get_platform_support() -> PlatformSupport {
     platform::current()
 }
 
-pub(crate) const EVENT_CONFIG: &str = "pickscribe://config";
-
 #[tauri::command]
 fn update_app_config(app: AppHandle, config: AppConfig) -> CommandResult<AppConfig> {
-    use tauri::Emitter;
-    let is_sentry_enabled = sentry_enabled(&config);
-    config.save().map_err(err_string)?;
-    TELEMETRY_ENABLED.store(is_sentry_enabled, Ordering::Relaxed);
-    if is_sentry_enabled {
-        if let Some(client) = SENTRY_CLIENT.get() {
-            sentry::Hub::main().bind_client(Some(Arc::clone(client)));
-        }
-    } else {
-        sentry::Hub::main().bind_client(None);
-        if let Ok(mut guard) = MINIDUMP_GUARD.lock() {
-            guard.take();
-        }
-    }
-    ensure_float_window(&app, config.general.float_button);
-    let _ = app.emit(EVENT_CONFIG, &config);
-    Ok(config)
+    settings::replace(&app, config)
 }
 
 #[tauri::command]
@@ -594,11 +563,7 @@ fn list_models() -> Vec<String> {
 
 #[tauri::command]
 fn toggle_float_button(app: AppHandle) -> CommandResult<bool> {
-    let mut cfg = AppConfig::load();
-    cfg.general.float_button = !cfg.general.float_button;
-    cfg.save().map_err(err_string)?;
-    ensure_float_window(&app, cfg.general.float_button);
-    Ok(cfg.general.float_button)
+    settings::toggle_float_button(&app).map(|config| config.general.float_button)
 }
 
 #[tauri::command]
@@ -824,8 +789,7 @@ fn clamp_float_window_size(window: &tauri::WebviewWindow) {
 pub fn run() {
     let context = tauri::generate_context!();
     let cfg = AppConfig::load();
-    let sentry_enabled = sentry_enabled(&cfg);
-    TELEMETRY_ENABLED.store(sentry_enabled, Ordering::Relaxed);
+    let sentry_enabled = settings::sentry_client_enabled(&cfg);
     let release = format!(
         "pickscribe@{}",
         context
@@ -838,8 +802,9 @@ pub fn run() {
         if sentry_enabled { SENTRY_DSN } else { "" },
         sentry::ClientOptions {
             release: Some(release.into()),
+            transport: Some(settings::transport_factory()),
             before_send: Some(Arc::new(|mut event| {
-                if !TELEMETRY_ENABLED.load(Ordering::Relaxed) {
+                if !settings::telemetry_enabled() {
                     return None;
                 }
                 event.server_name = None;
@@ -850,23 +815,11 @@ pub fn run() {
             ..Default::default()
         },
     ));
-    if sentry_client.is_enabled()
-        && let Some(client) = sentry::Hub::main().client()
-    {
-        let _ = SENTRY_CLIENT.set(client);
-    }
-    if sentry_enabled {
-        match tauri_plugin_sentry::minidump::init(&sentry_client) {
-            Ok(handle) => {
-                if let Ok(mut guard) = MINIDUMP_GUARD.lock() {
-                    *guard = Some(handle);
-                }
-            }
-            Err(err) => {
-                eprintln!("failed to initialize Sentry minidump handler: {err}");
-            }
-        }
-    }
+    let sentry_client_handle = sentry_client
+        .is_enabled()
+        .then(|| sentry::Hub::main().client())
+        .flatten();
+    settings::initialize_reporting(sentry_enabled, sentry_client_handle);
     let sentry_plugin = if sentry_enabled {
         tauri_plugin_sentry::init(&sentry_client)
     } else {
