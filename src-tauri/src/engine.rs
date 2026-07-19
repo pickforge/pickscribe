@@ -691,7 +691,9 @@ impl Engine {
         if let Some(chord) = self.chord_override.lock().unwrap().clone() {
             paste_cfg.chord = chord;
         }
-        let paste_error = paste::deliver(&paste_cfg, &outcome.text)
+        let delivery_cfg = paste::DeliveryConfig::from(&paste_cfg);
+        let paste_error = paste::deliver(&delivery_cfg, &outcome.text)
+            .into_result()
             .err()
             .map(|err| format!("paste failed (text copied if possible): {err:#}"));
         if !self.is_session_current(&session_id, &cancel_token) {
