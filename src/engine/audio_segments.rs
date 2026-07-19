@@ -224,6 +224,15 @@ pub fn ms_to_sample(ms: u64) -> u64 {
     ms.saturating_mul(SAMPLE_RATE_HZ as u64) / 1_000
 }
 
+/// Duration of the audio written so far to a growing WAV file. Used by the
+/// incremental scheduler to poll how much recorded audio is available
+/// without waiting for the file to be finalized.
+pub fn duration_ms(path: &Path) -> Result<u64> {
+    let bytes = fs::metadata(path)?.len().saturating_sub(WAV_HEADER_BYTES);
+    let samples = bytes / BYTES_PER_SAMPLE;
+    Ok(samples.saturating_mul(1_000) / SAMPLE_RATE_HZ as u64)
+}
+
 pub fn sample_to_ms(sample: u64) -> u64 {
     sample.saturating_mul(1_000) / SAMPLE_RATE_HZ as u64
 }
