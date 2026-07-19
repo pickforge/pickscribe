@@ -1,6 +1,7 @@
 mod engine;
 mod file_job;
 mod kwin;
+mod lifecycle;
 mod settings;
 mod tray;
 

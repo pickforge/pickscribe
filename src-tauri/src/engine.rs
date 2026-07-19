@@ -19,6 +19,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::file_job::FileJobControl;
+use crate::lifecycle::{self, SessionSnapshot};
 
 pub const EVENT_STATE: &str = "pickscribe://state";
 pub const EVENT_LEVEL: &str = "pickscribe://level";
@@ -113,6 +114,15 @@ struct SessionControl {
     temp_dir: Option<PathBuf>,
 }
 
+impl SessionControl {
+    fn snapshot(&self) -> SessionSnapshot {
+        SessionSnapshot {
+            id: self.id.clone(),
+            cancelled: self.cancel_token.is_cancelled(),
+        }
+    }
+}
+
 pub struct Engine {
     recording: Mutex<Option<ActiveRecording>>,
     active_session: Mutex<Option<SessionControl>>,
@@ -176,14 +186,9 @@ impl Engine {
     }
 
     fn is_session_current(&self, session_id: &str, token: &CancelToken) -> bool {
-        if token.is_cancelled() {
-            return false;
-        }
-        self.active_session
-            .lock()
-            .unwrap()
-            .as_ref()
-            .is_some_and(|active| active.id == session_id && !active.cancel_token.is_cancelled())
+        let active = self.active_session.lock().unwrap();
+        let snapshot = active.as_ref().map(SessionControl::snapshot);
+        lifecycle::session_is_current(snapshot.as_ref(), session_id, token.is_cancelled())
     }
 
     fn set_state_for_session(
@@ -194,14 +199,9 @@ impl Engine {
         update: impl FnOnce(&mut StatePayload),
     ) -> bool {
         let payload = {
-            if token.is_cancelled() {
-                return false;
-            }
             let active = self.active_session.lock().unwrap();
-            let Some(current) = active.as_ref() else {
-                return false;
-            };
-            if current.id != session_id || current.cancel_token.is_cancelled() {
+            let snapshot = active.as_ref().map(SessionControl::snapshot);
+            if !lifecycle::session_is_current(snapshot.as_ref(), session_id, token.is_cancelled()) {
                 return false;
             }
             let mut state = self.state.lock().unwrap();
@@ -221,14 +221,9 @@ impl Engine {
         update: impl FnOnce(&mut StatePayload),
     ) -> bool {
         let payload = {
-            if token.is_cancelled() {
-                return false;
-            }
             let mut active = self.active_session.lock().unwrap();
-            let Some(current) = active.as_ref() else {
-                return false;
-            };
-            if current.id != session_id || current.cancel_token.is_cancelled() {
+            let snapshot = active.as_ref().map(SessionControl::snapshot);
+            if !lifecycle::session_is_current(snapshot.as_ref(), session_id, token.is_cancelled()) {
                 return false;
             }
             let mut state = self.state.lock().unwrap();
@@ -252,11 +247,10 @@ impl Engine {
 
     pub fn toggle(self: &Arc<Self>, app: &AppHandle) {
         let stage = self.state.lock().unwrap().stage;
-        match stage {
-            Stage::Idle => self.start(app),
-            Stage::Recording => self.stop(app),
-            // Ignore toggles while the pipeline is busy.
-            _ => {}
+        match lifecycle::toggle_action(stage) {
+            lifecycle::ToggleAction::Start => self.start(app),
+            lifecycle::ToggleAction::Stop => self.stop(app),
+            lifecycle::ToggleAction::Ignore => {}
         }
     }
 
@@ -466,8 +460,7 @@ impl Engine {
                         .recv_timeout(Duration::from_secs(2))
                         .is_err()
                     {
-                        let _ =
-                            incremental::cleanup_session_dir(&incremental.temp_dir, keep_audio);
+                        let _ = incremental::cleanup_session_dir(&incremental.temp_dir, keep_audio);
                     }
                 } else {
                     recording.cancel();
@@ -596,12 +589,13 @@ impl Engine {
             if cfg.general.sounds {
                 sounds::play(sounds::Cue::Error);
             }
+            let (error, message) = lifecycle::failure_outcome(err);
             let _ = self.finish_session(app, &session_id, &cancel_token, |s| {
                 s.stage = Stage::Idle;
                 s.recording_started_ms = None;
                 s.segments.clear();
-                s.error = Some(err);
-                s.message = None;
+                s.error = error;
+                s.message = message;
             });
         };
 
@@ -633,17 +627,11 @@ impl Engine {
                             // prefix — nothing left to transcribe.
                             Ok(None) => Ok(prefix.raw_text),
                             Ok(Some(tail_path)) => {
-                                let tail = stt::transcribe_with_cancel(
-                                    &cfg.stt,
-                                    &tail_path,
-                                    is_cancelled,
-                                );
+                                let tail =
+                                    stt::transcribe_with_cancel(&cfg.stt, &tail_path, is_cancelled);
                                 let _ = fs::remove_file(&tail_path);
                                 tail.map(|tail| {
-                                    segments::merge_texts([
-                                        prefix.raw_text.as_str(),
-                                        tail.as_str(),
-                                    ])
+                                    segments::merge_texts([prefix.raw_text.as_str(), tail.as_str()])
                                 })
                             }
                             // Tail slicing failed — fall back to the whole
@@ -673,12 +661,13 @@ impl Engine {
             return;
         }
         if raw.is_empty() {
+            let (error, message) = lifecycle::no_speech_outcome();
             let _ = self.finish_session(app, &session_id, &cancel_token, |s| {
                 s.stage = Stage::Idle;
                 s.recording_started_ms = None;
                 s.segments.clear();
-                s.message = Some("No speech detected".into());
-                s.error = None;
+                s.message = message;
+                s.error = error;
             });
             return;
         }
@@ -708,7 +697,6 @@ impl Engine {
         if !self.is_session_current(&session_id, &cancel_token) {
             return;
         }
-        let (final_error, final_message) = final_delivery_status(paste_error, &outcome);
 
         let entry = NewEntry {
             duration_ms: duration_ms as i64,
@@ -743,14 +731,15 @@ impl Engine {
             }
             Err(_) => None,
         };
+        let delivered = lifecycle::delivery_outcome(paste_error, &outcome, last_entry);
 
         let _ = self.finish_session(app, &session_id, &cancel_token, |s| {
             s.stage = Stage::Idle;
             s.recording_started_ms = None;
             s.segments.clear();
-            s.error = final_error;
-            s.message = Some(final_message);
-            s.last_entry = last_entry;
+            s.error = delivered.error;
+            s.message = Some(delivered.message);
+            s.last_entry = delivered.last_entry;
         });
     }
 }
@@ -779,21 +768,6 @@ fn slice_fallback_tail(
         return Ok(None);
     }
     Ok(Some(tail_path))
-}
-
-fn final_delivery_status(
-    paste_error: Option<String>,
-    outcome: &cleanup::CleanupOutcome,
-) -> (Option<String>, String) {
-    let message = if outcome.cleaned {
-        "Cleaned and pasted"
-    } else if outcome.error.is_some() {
-        "Pasted raw transcript; cleanup unavailable"
-    } else {
-        "Pasted raw transcript"
-    };
-
-    (paste_error, message.into())
 }
 
 fn run_incremental_worker(worker: IncrementalWorker) -> IncrementalDone {
@@ -1121,7 +1095,8 @@ fn choose_segment_end(
         return desired_end_ms.min(available_ms);
     }
 
-    let target_sample = audio_segments::ms_to_sample(desired_end_ms.saturating_sub(scan_start_ms)) as usize;
+    let target_sample =
+        audio_segments::ms_to_sample(desired_end_ms.saturating_sub(scan_start_ms)) as usize;
     let radius_sample = (audio_segments::ms_to_sample(radius_ms) as usize).min(samples.len());
     let boundary_sample =
         audio_segments::find_low_energy_boundary(&samples, target_sample, radius_sample);
@@ -1134,34 +1109,9 @@ pub fn engine(app: &AppHandle) -> Arc<Engine> {
     Arc::clone(&*app.state::<Arc<Engine>>())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn outcome(cleaned: bool, error: Option<&str>) -> cleanup::CleanupOutcome {
-        cleanup::CleanupOutcome {
-            text: "transcript".into(),
-            provider: "ollama".into(),
-            model: "qwen2.5:14b".into(),
-            cleaned,
-            error: error.map(str::to_string),
-        }
-    }
-
-    #[test]
-    fn cleanup_fallback_after_success_is_neutral_status() {
-        let (error, message) = final_delivery_status(None, &outcome(false, Some("model missing")));
-
-        assert_eq!(error, None);
-        assert_eq!(message, "Pasted raw transcript; cleanup unavailable");
-    }
-
-    #[test]
-    fn paste_failure_still_surfaces_as_error() {
-        let (error, message) =
-            final_delivery_status(Some("paste failed".into()), &outcome(false, None));
-
-        assert_eq!(error.as_deref(), Some("paste failed"));
-        assert_eq!(message, "Pasted raw transcript");
-    }
-}
+// Transition validity, session-current gating, and terminal-outcome
+// projection are characterized in `lifecycle.rs`, which this module calls
+// into. See that module's tests for duplicate start/toggle, stop before
+// init finishes, cancellation at every pipeline checkpoint, stale
+// completion after cancel/new session, cleanup failure with raw delivery,
+// and history failure.
