@@ -36,14 +36,14 @@ Repo-local guide for agents working in PickScribe — local dictation for Linux
   blockers. At release time, copy and polish it into the GitHub release
   description, then reset the draft.
 - Bump the version in `src-tauri/tauri.conf.json` and `package.json`, land on
-  `main`, tag `vX.Y.Z`, push the tag. CI builds the Linux bundles (deb +
+  `main`, tag `vX.Y.Z`, and push the tag. CI builds the Linux bundles (deb +
   AppImage), signs the updater artifacts, generates `latest.json` (AppImage is
-  the primary updater artifact), and publishes the release **live** — make
-  sure `main` is ready before tagging.
+  the primary updater artifact), and uploads them to a draft release.
+- Desktop-smoke the exact draft AppImage before publishing manually. A rerun
+  replaces draft assets, so smoke the replacement AppImage again.
 - The GitHub release description is the single source of release notes; polish
-  it right after the workflow finishes. pickforge.dev/pickscribe shows the
-  latest release via the GitHub API — no website change needed for a normal
-  release.
+  it before publishing. pickforge.dev/pickscribe shows the latest published
+  release via the GitHub API — no website change needed for a normal release.
 - Only touch `landing-page` (`src/pages/products.ts`) when install methods,
   platforms, or positioning change.
 ## Workspace policy
