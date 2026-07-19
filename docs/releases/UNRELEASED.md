@@ -37,12 +37,17 @@ then reset this file.
   builds, verifies the rebuilt image, and re-signs it before asset collection.
 - Tagged builds create a draft GitHub release. Publishing remains a manual gate
   after the draft AppImage artifact passes a desktop smoke test.
+- CLI and desktop cleanup now share provider resolution, local-only enforcement,
+  prompts, response handling, raw fallback, and conservative segment safety.
 
 ## Validation
 
 ### Tested
 
 - Feature and fix PRs ran their focused frontend and Rust checks before merge.
+- Shared cleanup policy: `cargo test --workspace --locked --all-targets`,
+  `bun run build`, and CLI smoke checks for raw output, conservative segments,
+  local-only fallback, and strict non-zero exit behavior.
 - v0.2.0 release prep: `cargo check --workspace`, `bun run check`,
   `bun run test`, `bun run test:coverage`,
   `cargo test --workspace --locked --all-targets`, and
