@@ -1,20 +1,14 @@
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, ValueEnum};
-use pickscribe::engine::cleanup::{is_local_endpoint, segment_cleanup_is_safe};
-use reqwest::blocking::Client;
-use serde::{Deserialize, Serialize};
+use pickscribe::engine::cleanup::{
+    self as cleanup_engine, CleanupCredentials, CleanupKind, CleanupPolicy, FailurePolicy,
+};
 use std::{
     env,
     io::{self, IsTerminal, Read, Write},
     process::{Command, Stdio},
     time::Duration,
 };
-
-const DEFAULT_INSTRUCTIONS: &str = "Rewrite this dictated text so it is clean, natural, and ready to paste.\n\
-Keep the original language. If the text is Portuguese, use natural Brazilian Portuguese.\n\
-Fix punctuation, grammar, casing, and obvious speech-to-text mistakes.\n\
-Do not add explanations.\n\
-Return only the final text.";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -177,51 +171,6 @@ enum DeepseekThinking {
     Disabled,
 }
 
-#[derive(Debug)]
-struct LlmConfig {
-    provider: Provider,
-    endpoint: String,
-    model: String,
-    api_key: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct ChatRequest {
-    model: String,
-    messages: Vec<ChatMessage>,
-    temperature: f32,
-    stream: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    thinking: Option<Thinking>,
-}
-
-#[derive(Debug, Serialize)]
-struct Thinking {
-    #[serde(rename = "type")]
-    kind: String,
-}
-
-#[derive(Debug, Serialize)]
-struct ChatMessage {
-    role: String,
-    content: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatResponse {
-    choices: Vec<Choice>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Choice {
-    message: AssistantMessage,
-}
-
-#[derive(Debug, Deserialize)]
-struct AssistantMessage {
-    content: String,
-}
-
 fn main() -> Result<()> {
     let args = Args::parse();
     let input = read_input(&args)?;
@@ -230,33 +179,33 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let final_text = if args.segment && (args.no_llm || args.provider == Provider::None) {
+    let policy = cleanup_policy(&args);
+    let outcome = cleanup_engine::clean_with_policy(
+        &policy,
+        input.trim(),
+        if args.segment {
+            CleanupKind::Segment
+        } else {
+            CleanupKind::Full
+        },
+        if args.strict {
+            FailurePolicy::Strict
+        } else {
+            FailurePolicy::RawFallback
+        },
+    )?;
+    if args.segment && !outcome.cleaned {
         return Ok(());
-    } else if args.no_llm || args.provider == Provider::None {
-        input.trim().to_owned()
-    } else {
-        match clean_with_llm(&args, input.trim()) {
-            Ok(cleaned)
-                if !cleaned.trim().is_empty()
-                    && (!args.segment
-                        || (cleaned.trim() != input.trim()
-                            && segment_cleanup_is_safe(input.trim(), cleaned.trim()))) =>
-            {
-                cleaned.trim().to_owned()
-            }
-            Ok(_) if args.segment => return Ok(()),
-            Ok(_) => input.trim().to_owned(),
-            Err(err) if args.strict => return Err(err),
-            Err(_) if args.segment => return Ok(()),
-            Err(err) => {
-                warn(
-                    &args,
-                    format_args!("LLM cleanup failed; using original text: {err:#}"),
-                );
-                input.trim().to_owned()
-            }
+    }
+    if !args.segment {
+        if let Some(error) = &outcome.error {
+            warn(
+                &args,
+                format_args!("LLM cleanup failed; using original text: {error}"),
+            );
         }
-    };
+    }
+    let final_text = outcome.text.trim().to_owned();
 
     let stdout_only = args.stdout_only;
     if args.print || stdout_only {
@@ -303,168 +252,58 @@ fn read_input(args: &Args) -> Result<String> {
     Ok(input)
 }
 
-fn clean_with_llm(args: &Args, text: &str) -> Result<String> {
-    let config = resolve_llm_config(args)?;
-
-    if matches!(config.provider, Provider::Deepseek | Provider::Openai) && config.api_key.is_none()
-    {
-        return Err(anyhow!(
-            "missing API key for {:?}; set DEEPSEEK_API_KEY, OPENAI_API_KEY, or PICKSCRIBE_API_KEY",
-            config.provider
-        ));
-    }
-
-    let instructions = args.instructions.as_deref().unwrap_or(DEFAULT_INSTRUCTIONS);
-    let (system_prompt, user_prompt) = if args.segment {
-        (
-            "You clean one short dictated transcript fragment for a live preview.".to_owned(),
-            format!(
-                "Cleanup instructions, spelling notes, and vocabulary:\n{instructions}\n\n\
-Fragment:\n{text}\n\n\
-Return only a conservative cleanup of this fragment. Do not add examples, \
-complete unfinished thoughts, expand lists, or use words not supported by the fragment."
-            ),
-        )
-    } else {
-        (
-            "You clean up dictated text for immediate pasting.".to_owned(),
-            format!("{instructions}\n\nText:\n{text}"),
-        )
+fn cleanup_policy(args: &Args) -> CleanupPolicy {
+    let explicit_key = args.api_key.clone().filter(|key| !key.is_empty());
+    let provider_key = |name| {
+        explicit_key
+            .clone()
+            .or_else(|| env::var(name).ok().filter(|key| !key.is_empty()))
     };
-
-    let payload = ChatRequest {
-        model: config.model,
-        messages: vec![
-            ChatMessage {
-                role: "system".to_owned(),
-                content: system_prompt,
-            },
-            ChatMessage {
-                role: "user".to_owned(),
-                content: user_prompt,
-            },
-        ],
+    CleanupPolicy {
+        provider: if args.no_llm {
+            "none".into()
+        } else {
+            args.provider.as_str().into()
+        },
+        endpoint: args.endpoint.clone().unwrap_or_default(),
+        model: args.model.clone().unwrap_or_default(),
+        credentials: CleanupCredentials {
+            deepseek: provider_key("DEEPSEEK_API_KEY"),
+            openai: provider_key("OPENAI_API_KEY"),
+            ollama: provider_key("OLLAMA_API_KEY"),
+            custom: explicit_key,
+        },
         temperature: args.temperature,
-        stream: false,
-        thinking: deepseek_thinking_payload(args, config.provider),
-    };
-
-    let client = Client::builder()
-        .timeout(Duration::from_secs(args.timeout_secs))
-        .build()
-        .context("failed to build HTTP client")?;
-
-    let mut request = client
-        .post(&config.endpoint)
-        .header("Content-Type", "application/json")
-        .json(&payload);
-
-    if let Some(api_key) = config.api_key.as_deref().filter(|key| !key.is_empty()) {
-        request = request.bearer_auth(api_key);
-    }
-
-    let response = request
-        .send()
-        .with_context(|| format!("request to {} failed", config.endpoint))?;
-
-    let status = response.status();
-    let body = response.text().context("failed to read LLM response")?;
-
-    if !status.is_success() {
-        return Err(anyhow!("LLM returned HTTP {status}: {body}"));
-    }
-
-    let parsed: ChatResponse = serde_json::from_str(&body)
-        .with_context(|| format!("failed to parse LLM response JSON: {body}"))?;
-
-    parsed
-        .choices
-        .into_iter()
-        .next()
-        .map(|choice| choice.message.content)
-        .ok_or_else(|| anyhow!("LLM response had no choices"))
-}
-
-fn deepseek_thinking_payload(args: &Args, provider: Provider) -> Option<Thinking> {
-    if provider != Provider::Deepseek {
-        return None;
-    }
-
-    match args.deepseek_thinking {
-        DeepseekThinking::Auto => None,
-        DeepseekThinking::Enabled => Some(Thinking {
-            kind: "enabled".to_owned(),
-        }),
-        DeepseekThinking::Disabled => Some(Thinking {
-            kind: "disabled".to_owned(),
-        }),
+        timeout_secs: args.timeout_secs,
+        thinking: args.deepseek_thinking.as_str().into(),
+        instructions: args
+            .instructions
+            .clone()
+            .unwrap_or_else(|| pickscribe::config::DEFAULT_INSTRUCTIONS.into()),
+        local_only: args.local_only,
     }
 }
 
-fn resolve_llm_config(args: &Args) -> Result<LlmConfig> {
-    let provider = match args.provider {
-        Provider::Auto if args.local_only => Provider::Ollama,
-        Provider::Auto => {
-            if env::var_os("DEEPSEEK_API_KEY").is_some() || args.api_key.is_some() {
-                Provider::Deepseek
-            } else if env::var_os("OPENAI_API_KEY").is_some() {
-                Provider::Openai
-            } else {
-                Provider::Ollama
-            }
+impl Provider {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Deepseek => "deepseek",
+            Self::Ollama => "ollama",
+            Self::Openai => "openai",
+            Self::None => "none",
         }
-        provider => provider,
-    };
-
-    let endpoint = match (&args.endpoint, provider) {
-        (Some(endpoint), _) => endpoint.clone(),
-        (None, Provider::Deepseek) => "https://api.deepseek.com/v1/chat/completions".to_owned(),
-        (None, Provider::Openai) => "https://api.openai.com/v1/chat/completions".to_owned(),
-        (None, Provider::Ollama) => ollama_endpoint(),
-        (None, Provider::None | Provider::Auto) => return Err(anyhow!("invalid LLM provider")),
-    };
-
-    let model = args.model.clone().unwrap_or_else(|| match provider {
-        Provider::Deepseek => "deepseek-v4-flash".to_owned(),
-        Provider::Openai => "gpt-4o-mini".to_owned(),
-        Provider::Ollama => env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen2.5:14b".to_owned()),
-        Provider::None | Provider::Auto => unreachable!(),
-    });
-
-    let api_key = args.api_key.clone().or_else(|| match provider {
-        Provider::Deepseek => env::var("DEEPSEEK_API_KEY").ok(),
-        Provider::Openai => env::var("OPENAI_API_KEY").ok(),
-        Provider::Ollama => env::var("OLLAMA_API_KEY").ok(),
-        Provider::None | Provider::Auto => None,
-    });
-
-    if args.local_only && !is_local_endpoint(&endpoint) {
-        return Err(anyhow!(
-            "local-only mode blocks remote endpoint {endpoint}; use Ollama or disable cleanup"
-        ));
     }
-    if args.local_only && model.ends_with(":cloud") {
-        return Err(anyhow!(
-            "local-only mode blocks {model}; Ollama ':cloud' models run outside this machine"
-        ));
-    }
-
-    Ok(LlmConfig {
-        provider,
-        endpoint,
-        model,
-        api_key,
-    })
 }
 
-fn ollama_endpoint() -> String {
-    let host = env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11434".to_owned());
-    let host = if host.starts_with("http://") || host.starts_with("https://") {
-        host
-    } else {
-        format!("http://{host}")
-    };
-    format!("{}/v1/chat/completions", host.trim_end_matches('/'))
+impl DeepseekThinking {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Enabled => "enabled",
+            Self::Disabled => "disabled",
+        }
+    }
 }
 
 fn copy_to_clipboard(text: &str) -> Result<()> {
@@ -707,7 +546,14 @@ mod tests {
             "hello",
         ]);
 
-        let err = resolve_llm_config(&args).unwrap_err().to_string();
+        let err = cleanup_engine::clean_with_policy(
+            &cleanup_policy(&args),
+            "hello",
+            CleanupKind::Full,
+            FailurePolicy::Strict,
+        )
+        .unwrap_err()
+        .to_string();
 
         assert!(err.contains("local-only mode blocks remote endpoint"));
     }
@@ -724,7 +570,14 @@ mod tests {
             "hello",
         ]);
 
-        let err = resolve_llm_config(&args).unwrap_err().to_string();
+        let err = cleanup_engine::clean_with_policy(
+            &cleanup_policy(&args),
+            "hello",
+            CleanupKind::Full,
+            FailurePolicy::Strict,
+        )
+        .unwrap_err()
+        .to_string();
 
         assert!(err.contains(":cloud"));
     }
@@ -741,9 +594,9 @@ mod tests {
             "hello",
         ]);
 
-        let config = resolve_llm_config(&args).unwrap();
+        let policy = cleanup_policy(&args);
+        let resolved = cleanup_engine::resolve_policy(&policy).unwrap();
 
-        assert_eq!(config.provider, Provider::Ollama);
-        assert!(is_local_endpoint(&config.endpoint));
+        assert_eq!(resolved.provider, "ollama");
     }
 }

@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use pickscribe::config::AppConfig;
-use pickscribe::engine::{command_exists, media, stt, transcript};
+use pickscribe::engine::{cleanup, command_exists, media, stt, transcript};
 use pickscribe::history::{HistoryEntry, Metrics};
 use pickscribe::platform::{self, PlatformSupport};
 use serde::Serialize;
@@ -489,49 +489,28 @@ fn run_doctor_checks() -> Vec<DoctorCheck> {
         command_exists("wl-copy") || command_exists("xclip") || command_exists("xsel"),
         "wl-copy / xclip / xsel".into(),
     );
-    let provider = cfg.effective_provider();
-    let (cleanup_ok, cleanup_detail) = if cfg.cleanup.provider == "none" {
+    let cleanup_policy = cleanup::CleanupPolicy::from_app_config(&cfg);
+    let (cleanup_ok, cleanup_detail) = if cleanup_policy.provider == "none" {
         (true, "cleanup disabled — raw transcript is pasted".into())
-    } else if cfg.general.local_only && matches!(provider.as_str(), "deepseek" | "openai") {
-        (
-            false,
-            format!("local-only mode blocks {provider} — switch to Ollama, a local endpoint, or none"),
-        )
-    } else if provider == "custom" {
-        if cfg.cleanup.endpoint.is_empty() {
-            (false, "custom provider needs an endpoint URL".into())
-        } else if cfg.general.local_only
-            && !pickscribe::engine::cleanup::is_local_endpoint(&cfg.cleanup.endpoint)
-        {
-            (false, "local-only mode blocks this remote endpoint".into())
-        } else if cfg.cleanup.model.is_empty() {
-            (false, "custom endpoint set — pick a model".into())
-        } else {
-            (true, format!("custom · {}", cfg.cleanup.model))
-        }
-    } else if provider == "ollama" {
-        if cfg.cleanup.model.ends_with(":cloud") {
-            if cfg.general.local_only {
-                (
-                    false,
-                    format!(
-                        "{} is an Ollama cloud model (runs on ollama.com) — blocked in local-only mode",
-                        cfg.cleanup.model
-                    ),
-                )
-            } else {
-                (
-                    true,
-                    format!("ollama · {} — note: ':cloud' models run on ollama.com", cfg.cleanup.model),
-                )
-            }
-        } else {
-            (true, "ollama (local)".into())
-        }
-    } else if cfg.resolve_api_key(&provider).is_some() {
-        (true, format!("{provider} ready"))
     } else {
-        (false, format!("{provider} selected but no API key found"))
+        match cleanup::resolve_policy(&cleanup_policy) {
+            Err(error) => (false, error.to_string()),
+            Ok(target) if target.provider == "custom" && target.model.is_empty() => {
+                (false, "custom endpoint set — pick a model".into())
+            }
+            Ok(target) if target.provider == "custom" => {
+                (true, format!("custom · {}", target.model))
+            }
+            Ok(target) if target.provider == "ollama" && target.model.ends_with(":cloud") => (
+                true,
+                format!(
+                    "ollama · {} — note: ':cloud' models run on ollama.com",
+                    target.model
+                ),
+            ),
+            Ok(target) if target.provider == "ollama" => (true, "ollama (local)".into()),
+            Ok(target) => (true, format!("{} ready", target.provider)),
+        }
     };
     push("Cleanup provider", cleanup_ok, cleanup_detail);
     if cfg.general.local_only {

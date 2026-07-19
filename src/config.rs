@@ -251,32 +251,6 @@ impl AppConfig {
             }
         })
     }
-
-    /// Provider after resolving "auto" the same way the CLI does.
-    /// In local-only mode, "auto" always resolves to the local Ollama.
-    pub fn effective_provider(&self) -> String {
-        if self.cleanup.provider != "auto" {
-            return self.cleanup.provider.clone();
-        }
-        if self.general.local_only {
-            return "ollama".into();
-        }
-        if self.resolve_api_key("deepseek").is_some() {
-            "deepseek".into()
-        } else if self.resolve_api_key("openai").is_some() {
-            "openai".into()
-        } else {
-            "ollama".into()
-        }
-    }
-
-    pub fn effective_instructions(&self) -> &str {
-        if self.cleanup.instructions.trim().is_empty() {
-            DEFAULT_INSTRUCTIONS
-        } else {
-            &self.cleanup.instructions
-        }
-    }
 }
 
 /// Parse `export KEY="value"` / `KEY=value` lines from ~/.config/pickscribe/env
