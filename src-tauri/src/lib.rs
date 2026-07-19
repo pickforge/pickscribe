@@ -284,8 +284,18 @@ fn update_app_config(app: AppHandle, config: AppConfig) -> CommandResult<AppConf
 }
 
 #[tauri::command]
-fn get_system_theme() -> String {
-    if tray::panel_prefers_dark() { "dark".into() } else { "light".into() }
+async fn get_system_theme(app: AppHandle, engine: State<'_, Arc<Engine>>) -> CommandResult<String> {
+    let stage = engine.state().stage;
+    tauri::async_runtime::spawn_blocking(move || {
+        // The frontend calls this on explicit theme events (media-query
+        // change, window focus), so force a fresh probe and re-sync the
+        // tray icon in case the panel theme flipped.
+        let dark = tray::refresh_panel_prefers_dark();
+        tray::sync(&app, stage);
+        if dark { "dark".into() } else { "light".into() }
+    })
+    .await
+    .map_err(err_string)
 }
 
 #[tauri::command]
@@ -436,7 +446,13 @@ struct DoctorCheck {
 }
 
 #[tauri::command]
-fn run_doctor() -> Vec<DoctorCheck> {
+async fn run_doctor() -> CommandResult<Vec<DoctorCheck>> {
+    tauri::async_runtime::spawn_blocking(run_doctor_checks)
+        .await
+        .map_err(err_string)
+}
+
+fn run_doctor_checks() -> Vec<DoctorCheck> {
     let cfg = AppConfig::load();
     let support = platform::current();
     let mut checks = Vec::new();
@@ -560,8 +576,12 @@ fn run_doctor() -> Vec<DoctorCheck> {
 }
 
 #[tauri::command]
-fn list_cleanup_models(config: AppConfig) -> CommandResult<Vec<String>> {
-    pickscribe::engine::cleanup::list_models(&config).map_err(err_string)
+async fn list_cleanup_models(config: AppConfig) -> CommandResult<Vec<String>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        pickscribe::engine::cleanup::list_models(&config).map_err(err_string)
+    })
+    .await
+    .map_err(err_string)?
 }
 
 #[tauri::command]
@@ -610,12 +630,11 @@ fn fix_csd_titlebar_input(window: &tauri::WebviewWindow) {
     let _ = window.run_on_main_thread(move || {
         use gtk::prelude::*;
 
-        if let Ok(gtk_window) = handle.gtk_window() {
-            if let Some(titlebar) = gtk_window.titlebar() {
-                if let Some(event_box) = titlebar.downcast_ref::<gtk::EventBox>() {
-                    event_box.set_above_child(false);
-                }
-            }
+        if let Ok(gtk_window) = handle.gtk_window()
+            && let Some(titlebar) = gtk_window.titlebar()
+            && let Some(event_box) = titlebar.downcast_ref::<gtk::EventBox>()
+        {
+            event_box.set_above_child(false);
         }
     });
 }
@@ -831,10 +850,10 @@ pub fn run() {
             ..Default::default()
         },
     ));
-    if sentry_client.is_enabled() {
-        if let Some(client) = sentry::Hub::main().client() {
-            let _ = SENTRY_CLIENT.set(client);
-        }
+    if sentry_client.is_enabled()
+        && let Some(client) = sentry::Hub::main().client()
+    {
+        let _ = SENTRY_CLIENT.set(client);
     }
     if sentry_enabled {
         match tauri_plugin_sentry::minidump::init(&sentry_client) {
@@ -907,10 +926,10 @@ pub fn run() {
                 fix_csd_titlebar_input(&window);
             }
             let args: Vec<String> = std::env::args().collect();
-            if args.iter().any(|a| a == "--hidden") {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.hide();
-                }
+            if args.iter().any(|a| a == "--hidden")
+                && let Some(window) = app.get_webview_window("main")
+            {
+                let _ = window.hide();
             }
             if args.iter().any(|a| a == "--toggle") {
                 let handle = app.handle().clone();
