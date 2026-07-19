@@ -23,6 +23,18 @@ then reset this file.
 
 - The float capsule's idle waveform no longer renders with stretched dashes
   on some app starts; it now re-measures itself as the window settles (#41).
+- The UI stays responsive while heavy work runs (#48): fetching the cleanup
+  model list and running doctor checks no longer freeze the window when an
+  endpoint is slow or unreachable, cancelling a recording returns
+  immediately, and starting dictation no longer stalls on the recorder
+  warm-up check.
+- The tray icon no longer probes the desktop theme with a subprocess on
+  every state change; the probe is cached and the icon is only re-set when
+  it actually changes (#48).
+- When live (incremental) transcription can't finish in time at stop — e.g.
+  a long final segment — the completed live segments are now preserved and
+  only the remaining tail is re-transcribed, instead of silently
+  re-transcribing the whole recording (#48).
 
 ## Internal/release changes
 
@@ -41,6 +53,9 @@ then reset this file.
   double-click fix.
 - `cargo test --workspace` (79), `bun run check`, `bun run test:coverage`
   (ratchet green) on the file-transcription PRs.
+- `cargo test --workspace --locked --all-targets` (83), `bun run check`,
+  `bun run test`, `bun run test:coverage`, `bun run build`, and
+  `cargo clippy` clean on touched files for the #48 responsiveness work.
 - ffmpeg conversion flags verified live against WAV/MP3/MP4 samples; whisper
   `--output-json`/progress format verified against the installed whisper-cli.
 
