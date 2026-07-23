@@ -256,6 +256,8 @@ impl Engine {
         }
     }
 
+    // TODO(#63): split legacy recording startup into capped helpers.
+    #[allow(clippy::too_many_lines)]
     pub fn start(self: &Arc<Self>, app: &AppHandle) {
         let support = platform::current();
         if let Some(message) = support.unsupported_dictation_message() {
@@ -576,6 +578,8 @@ impl Engine {
         }
     }
 
+    // TODO(#63): split legacy pipeline orchestration into capped helpers.
+    #[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
     fn run_pipeline(self: Arc<Self>, app: &AppHandle, cfg: AppConfig, active: ActiveRecording) {
         let ActiveRecording {
             session_id,
