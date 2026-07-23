@@ -6,6 +6,8 @@
       "name": "pickscribe-app",
       "dependencies": {
         "@pickforge/brand": "0.2.1",
+        "@pickforge/flags": "^0.12.0",
+        "@pickforge/tauri-updater": "^0.12.0",
         "@tauri-apps/api": "^2.9.0",
         "@tauri-apps/plugin-autostart": "^2.5.0",
         "@tauri-apps/plugin-opener": "^2.5.0",
@@ -132,7 +134,11 @@
 
     "@pickforge/brand": ["@pickforge/brand@0.2.1", "", { "dependencies": { "@fontsource/geist-mono": "^5.2.8", "@fontsource/geist-sans": "^5.2.5" } }, "sha512-8VASbOUFJKUkb2zVvqto7aPynyICISCMzrh8jMRcvovtKNpzbLMrZ2xS7eeIPQyVs5NRbJ0457Vb0HQC+sIhQQ=="],
 
+    "@pickforge/flags": ["@pickforge/flags@0.12.0", "", {}, "sha512-iHKSDfS7WdqpItSdes2ledMHvibVBfExRf7ZKbLXwhYYw/FoNjzfdNy3fIvfJqBrMmGJuwQ8An8IKBv5QUvVrA=="],
+
     "@pickforge/tauri-release": ["@pickforge/tauri-release@0.3.0", "", { "bin": { "pickforge-tauri-release": "dist/cli.js" } }, "sha512-LTpsp6+zB9WU9eflvWH8tRFGNCJmiQW7ULYNnffQYCgfZ3fSqF33yDBKW38WdXdlyDBEcYpFnYjkw0+YnLob8Q=="],
+
+    "@pickforge/tauri-updater": ["@pickforge/tauri-updater@0.12.0", "", {}, "sha512-3q5SgSAJBV/ctpxFGKUvKOHZ6uIszhgO3BPajgA+BrffulARzrW9Uv4fXRy4TFWoV83LNlSy9GVnCi6dYWnJBw=="],
 
     "@rollup/rollup-android-arm-eabi": ["@rollup/rollup-android-arm-eabi@4.61.1", "", { "os": "android", "cpu": "arm" }, "sha512-JnBB8MdXj45cajvTuO5FmPlvFVJRQgvrz1uSEl3NwqFnReAPGwb8EanbGi4z2nRaqLzjJSv5/JmycoTKlRZxHA=="],
 

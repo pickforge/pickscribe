@@ -46,4 +46,13 @@ if (desktopApiAvailable()) {
   initTheme("system");
 }
 
-export default mount(component, { target });
+const mounted = mount(component, { target });
+
+if (import.meta.env.DEV && component === App) {
+  void import("./lib/updateFixture").then(({ fixtureStateFromLocation, mountUpdateFixture }) => {
+    const state = fixtureStateFromLocation();
+    if (state) void mountUpdateFixture(state);
+  });
+}
+
+export default mounted;
