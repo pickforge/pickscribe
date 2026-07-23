@@ -3,6 +3,10 @@ members = [".", "src-tauri"]
 default-members = ["."]
 resolver = "2"
 
+[workspace.lints.clippy]
+cognitive_complexity = "deny"
+too_many_lines = "deny"
+
 [profile.release]
 debug = "line-tables-only"
 
@@ -13,6 +17,9 @@ edition = "2024"
 description = "PickScribe by Pickforge Studio: local Linux dictation with AI cleanup and paste"
 license = "MIT"
 repository = "https://github.com/pickforge/pickscribe"
+
+[lints]
+workspace = true
 
 [lib]
 name = "pickscribe"

@@ -786,6 +786,8 @@ fn clamp_float_window_size(window: &tauri::WebviewWindow) {
     ));
 }
 
+// TODO(#63): split legacy application setup into capped helpers.
+#[allow(clippy::too_many_lines)]
 pub fn run() {
     let context = tauri::generate_context!();
     let cfg = AppConfig::load();

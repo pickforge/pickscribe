@@ -39,7 +39,7 @@ impl Transport for GatedTransport {
 
 #[derive(Debug, Clone)]
 enum SettingsMutation {
-    Replace(AppConfig),
+    Replace(Box<AppConfig>),
     ToggleFloatButton,
 }
 
@@ -83,7 +83,7 @@ impl SettingsBackend for AppBackend<'_> {
 }
 
 pub(crate) fn replace(app: &AppHandle, config: AppConfig) -> Result<AppConfig, String> {
-    apply_to_app(app, SettingsMutation::Replace(config))
+    apply_to_app(app, SettingsMutation::Replace(Box::new(config)))
 }
 
 pub(crate) fn toggle_float_button(app: &AppHandle) -> Result<AppConfig, String> {
@@ -104,7 +104,7 @@ fn apply_mutation(
     let config = match mutation {
         SettingsMutation::Replace(config) => {
             validate(&config)?;
-            config
+            *config
         }
         SettingsMutation::ToggleFloatButton => {
             let mut config = backend.load();
@@ -266,7 +266,7 @@ mod tests {
             MutationPath::FullSave => {
                 let mut config = AppConfig::default();
                 config.general.float_button = false;
-                SettingsMutation::Replace(config)
+                SettingsMutation::Replace(Box::new(config))
             }
             MutationPath::FloatToggle => SettingsMutation::ToggleFloatButton,
         }
@@ -327,7 +327,11 @@ mod tests {
         let mut config = AppConfig::default();
         config.general.theme = "sepia".into();
 
-        let error = apply_mutation(&mut backend, SettingsMutation::Replace(config)).unwrap_err();
+        let error = apply_mutation(
+            &mut backend,
+            SettingsMutation::Replace(Box::new(config)),
+        )
+        .unwrap_err();
 
         assert_eq!(error, "invalid theme: sepia");
         assert!(backend.calls.is_empty());
@@ -352,7 +356,11 @@ mod tests {
         config.general.local_only = true;
         config.general.crash_reports = true;
 
-        apply_mutation(&mut backend, SettingsMutation::Replace(config)).unwrap();
+        apply_mutation(
+            &mut backend,
+            SettingsMutation::Replace(Box::new(config)),
+        )
+        .unwrap();
 
         assert_eq!(
             backend.calls,

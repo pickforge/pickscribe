@@ -1,0 +1,14 @@
+{
+  "results": [
+    {
+      "source": { "path": "Cargo.lock" },
+      "packages": [
+        {
+          "package": { "name": "high-package", "version": "1.0.0" },
+          "groups": [{ "ids": ["OSV-HIGH"], "max_severity": "7.0" }]
+        }
+      ]
+    },
+    { "source": { "path": "bun.lock" }, "packages": [] }
+  ]
+}

@@ -123,6 +123,8 @@ fn validate_input_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
+// TODO(#63): split legacy file-job orchestration into capped helpers.
+#[allow(clippy::too_many_lines)]
 fn run_file_job(
     engine: Arc<Engine>,
     app: AppHandle,

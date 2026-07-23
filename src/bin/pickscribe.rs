@@ -1087,6 +1087,8 @@ fn transcribe(args: &Args, audio_path: &Path) -> Result<String> {
     }
 }
 
+// TODO(#63): extract the legacy whisper process orchestration below the cap.
+#[allow(clippy::too_many_lines)]
 fn transcribe_incremental_segment(
     args: &Args,
     audio_path: &Path,
