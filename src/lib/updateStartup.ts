@@ -30,8 +30,9 @@ export async function scheduleStartupUpdate({
     void check().catch(noop);
   };
 
+  let unsubscribe: (() => void) | undefined;
   try {
-    const unsubscribe = await window.onFocusChanged(({ payload: focused }) => {
+    unsubscribe = await window.onFocusChanged(({ payload: focused }) => {
       if (!focused) return;
       if (!studioEnabled) {
         runOnce();
@@ -48,6 +49,9 @@ export async function scheduleStartupUpdate({
     if (visible && (!studioEnabled || (await window.isFocused()))) runOnce();
     return unsubscribe;
   } catch {
+    // A failed visibility query after the listener registered must not leak
+    // the listener for the webview's lifetime.
+    unsubscribe?.();
     return noop;
   }
 }

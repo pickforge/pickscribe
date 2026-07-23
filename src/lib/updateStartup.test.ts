@@ -140,6 +140,23 @@ describe("startup updater integration", () => {
     expect(studio.check).toHaveBeenCalledOnce();
   });
 
+  it("unsubscribes the focus listener when a visibility query fails after registration", async () => {
+    const window = new FakeUpdateWindow();
+    window.isVisible = async () => {
+      throw new Error("ipc failure");
+    };
+    const studio = injectedController();
+
+    await scheduleStartupUpdate({
+      studioEnabled: true,
+      window,
+      legacyCheck: vi.fn(async () => {}),
+      studioController: studio.controller,
+    });
+
+    expect(window.listener).toBeUndefined();
+  });
+
   it("excludes hidden autostart until first focus and checks only once", async () => {
     const window = new FakeUpdateWindow();
     window.visible = false;

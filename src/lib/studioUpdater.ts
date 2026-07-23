@@ -38,6 +38,9 @@ export function mountStudioUpdater(options: StudioUpdaterOptions = {}): MountedS
         check,
         relaunch,
       }),
+    // Static eligibility: visible/focused deferral is NOT handled here — the
+    // caller must gate `controller.start()` through `scheduleStartupUpdate`,
+    // which owns the visible+focused main-window wait for this app.
     eligibility: createEligibility(
       options.eligibility ?? {
         packaged: !import.meta.env.DEV,
