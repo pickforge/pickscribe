@@ -14,13 +14,16 @@
     type DoctorCheck,
   } from "../api";
   import { reconcileExternalSettings, shouldApplySaveResponse } from "../settingsMerge";
+  import { settingsSaveDisplayState } from "../settingsDisplay";
   import { setTheme, type ThemeSetting } from "../theme";
 
   let {
     onDirtyChange = () => {},
+    onSavingChange = () => {},
     bindActions = () => {},
   }: {
     onDirtyChange?: (dirty: boolean) => void;
+    onSavingChange?: (saving: boolean) => void;
     bindActions?: (actions: { save: () => Promise<boolean>; discard: () => void }) => void;
   } = $props();
 
@@ -44,9 +47,14 @@
   const dirty = $derived(
     config !== null && savedJson !== "" && JSON.stringify($state.snapshot(config)) !== savedJson
   );
+  const saveDisplay = $derived(settingsSaveDisplayState(dirty));
 
   $effect(() => {
     onDirtyChange(dirty);
+  });
+
+  $effect(() => {
+    onSavingChange(saving);
   });
 
   $effect(() => {
@@ -211,8 +219,16 @@
     </div>
     <div class="head-actions">
       {#if status}<span class="pill ok" role="status">{status}</span>{/if}
-      <button type="button" class="btn btn-primary" onclick={save} disabled={saving || !config}>
-        {saving ? "Saving…" : "Save changes"}
+      <button
+        type="button"
+        class="btn btn-primary header-save"
+        class:header-save-hidden={saveDisplay.headerSaveHidden}
+        disabled={saveDisplay.headerSaveDisabled}
+        aria-hidden={saveDisplay.headerSaveHidden}
+        tabindex={saveDisplay.headerSaveHidden ? -1 : 0}
+        onclick={save}
+      >
+        Save changes
       </button>
     </div>
   </header>
@@ -625,16 +641,14 @@
       </div>
     </div>
 
-    {#if dirty}
-      <div class="save-bar glass" role="status">
-        <span class="save-dot"></span>
-        <span class="save-text">Unsaved changes</span>
-        <button type="button" class="btn btn-ghost btn-sm" onclick={discard}>Discard</button>
-        <button type="button" class="btn btn-primary btn-sm" onclick={save} disabled={saving}>
-          {saving ? "Saving…" : "Save changes"}
-        </button>
-      </div>
-    {/if}
+    <!--
+      Dirty-state save/discard actions render at the app overlay layer
+      (App.svelte), not here. `.content.fade-up` (the scrolling ancestor in
+      App.svelte) carries a transform via its entrance animation, which
+      makes it a containing block for `position: fixed` descendants — a
+      fixed element placed inside it would be positioned/clipped relative to
+      that scroller instead of the app viewport. See issue #45.
+    -->
 
     <div class="panel card hotkey-panel">
       <h3>Global hotkey</h3>
@@ -805,44 +819,8 @@
     width: 140px;
   }
 
-  .save-bar {
-    position: fixed;
-    bottom: 22px;
-    right: 28px;
-    z-index: 50;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 10px 12px 10px 16px;
-    border-radius: var(--radius-pill);
-    border-color: color-mix(in srgb, var(--ember) 35%, transparent);
-    box-shadow: var(--glow-ember-soft);
-    animation: save-bar-in 400ms var(--ease-forge) both;
-  }
-
-  @keyframes save-bar-in {
-    from {
-      opacity: 0;
-      transform: translateY(16px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-
-  .save-dot {
-    width: 4px;
-    height: 9px;
-    border: var(--pf-bracket-width) solid var(--ember);
-    border-right: none;
-    border-radius: 2px 0 0 2px;
-    flex: none;
-  }
-
-  .save-text {
-    font-size: 13px;
-    font-weight: 600;
+  .header-save-hidden {
+    visibility: hidden;
   }
 
   .model-row {
