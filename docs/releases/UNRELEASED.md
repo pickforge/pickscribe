@@ -27,6 +27,10 @@ then reset this file.
 - Settings now change runtime behavior only after persistence succeeds.
   Float-button changes from the tray or capsule stay synchronized with an open Settings form
   without overwriting unrelated unsaved edits.
+- Fixed the float capsule staying out of KDE's Alt+Tab switcher when running
+  through the `PICKSCRIBE_X11=1` XWayland fallback. The KWin `skipswitcher`
+  rule now installs for any KDE Wayland session — native Wayland or its
+  XWayland fallback — instead of only native Wayland.
 - Fixed unsaved Settings actions disappearing at compact window sizes. The
   save/discard controls now render at the app overlay layer instead of
   inside the scrolling Settings surface (whose entrance animation made it a
@@ -57,6 +61,25 @@ then reset this file.
 
 ### Tested
 
+- Issue #46 (float capsule KDE Alt+Tab exclusion, porting the accepted
+  PickGauge #49 fix merged as pickgauge#66): extracted the gating logic in
+  `kwin.rs` into a pure `is_kde_wayland_session(xdg_session_type,
+  xdg_current_desktop)` predicate and removed the `GDK_BACKEND == "x11"`
+  early return that skipped the KWin rule for the `PICKSCRIBE_X11=1`
+  XWayland fallback (renderer backend is orthogonal to session type — the
+  KDE-desktop filter that protects non-KDE desktops from kwinrulesrc writes
+  is unchanged). Ported 7 unit tests from pickgauge's `kwin.rs` covering the
+  predicate and the existing `group_has_key` helper (verified with an
+  isolated `rustc` compile — 7/7 pass — because the full
+  `cargo test --workspace --locked --all-targets` run fails to build on this
+  macOS dev machine identically on unmodified `origin/main`: `.transparent()`
+  is not available without the tauri `"transparent"` Cargo feature here, a
+  pre-existing environment gap unrelated to this change). `bun run check`,
+  `bunx vitest run` (33 tests), and `bun run build` all pass. Updated the
+  `ensure_float_window` doc comment and README's task-switcher table to
+  match PickScribe's actual platform support (Linux only for now; Windows/
+  macOS rows omitted rather than claiming untested support that doesn't
+  exist yet). Real KDE Alt+Tab validation defers to Elberte-PC.
 - Issue #45 (unsaved Settings actions at compact sizes, porting the accepted
   PickGauge #47 pattern): `bun run check`, `vitest run` (33 frontend tests,
   including a new `settingsSaveDisplayState` characterization suite covering

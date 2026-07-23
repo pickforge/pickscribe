@@ -59,7 +59,15 @@ pickscribe-app --toggle
 
 The single-instance plugin forwards `--toggle` to the running app, so the same command starts the app when needed. Existing shortcuts pointing at the legacy wrappers keep working: `pickscribe-gui` and `pickscribe-terminal-gui` automatically forward to the desktop app when it is installed (the terminal variant passes `--paste-chord=ctrl-shift-v`), falling back to the CLI flow otherwise (`PICKSCRIBE_FORCE_CLI=1` forces the CLI). The CLI binaries keep working unchanged; the app reads the same `~/.config/pickscribe/env` for API keys and stores its own settings in `~/.config/pickscribe/config.toml`.
 
-On Wayland the app runs natively (smooth WebKitGTK scrolling). The floating button stays on top through a KWin window rule that PickScribe installs automatically on KDE (forcing keep-above, no-focus, and skip-taskbar for the capsule). On Wayland compositors without window rules, set `PICKSCRIBE_X11=1` to fall back to XWayland keep-above.
+On Wayland the app runs natively (smooth WebKitGTK scrolling). On Wayland compositors without window rules, set `PICKSCRIBE_X11=1` to fall back to XWayland keep-above.
+
+**Task-switcher / taskbar visibility.** The capsule is meant to stay out of the taskbar, pager, and window switcher — support is platform-dependent and documented honestly, not assumed:
+
+| Platform | Mechanism | Status |
+| --- | --- | --- |
+| Linux/KDE, Wayland or its `PICKSCRIBE_X11=1` XWayland fallback | App-managed KWin `skipswitcher`/`skiptaskbar`/`skippager` window rule, alongside Tauri's `skip_taskbar` | Supported |
+| Other Linux desktops/window managers | Tauri's standards-based `skip_taskbar` (X11 `_NET_WM_STATE_SKIP_TASKBAR`/`SKIP_PAGER`) only, no app-managed desktop config | Partial — Alt+Tab-equivalent exclusion is desktop-specific and untested outside KDE |
+| Windows/macOS | Not applicable yet | PickScribe ships Linux only for now (see Status above) |
 
 ### Crash reports
 
