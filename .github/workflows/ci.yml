@@ -26,6 +26,25 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  dependency-audit:
+    name: Dependency audit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Scan lockfiles with OSV-Scanner
+        uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+        continue-on-error: true
+        with:
+          scan-args: |-
+            --recursive
+            --format=json
+            --output-file=osv-results.json
+            ./
+
+      - name: Block high and critical advisories
+        run: jq --exit-status --raw-output --from-file .github/check-osv-severity.jq osv-results.json
+
   check:
     name: Check and build
     runs-on: ubuntu-24.04
