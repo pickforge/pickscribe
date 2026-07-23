@@ -657,6 +657,7 @@ pub(crate) fn ensure_float_window(app: &AppHandle, visible: bool) {
         .shadow(false)
         .always_on_top(true)
         .focusable(false)
+        .accept_first_mouse(true)
         .skip_taskbar(true)
         .visible_on_all_workspaces(true)
         .position(64.0, 64.0)
