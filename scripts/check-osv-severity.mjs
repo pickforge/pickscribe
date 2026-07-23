@@ -22,7 +22,29 @@ for (const lockfile of expectedLockfiles) {
   }
 }
 
+const vulnerabilitiesById = new Map();
+for (const result of report.results) {
+  for (const entry of result.packages ?? []) {
+    for (const vulnerability of entry.vulnerabilities ?? []) {
+      if (vulnerability.id) {
+        vulnerabilitiesById.set(vulnerability.id, vulnerability);
+      }
+    }
+  }
+}
+
+function isInformational(vulnerability) {
+  return (
+    Boolean(vulnerability?.withdrawn) ||
+    Boolean(vulnerability?.database_specific?.informational) ||
+    vulnerability?.affected?.some(
+      (affected) => affected.database_specific?.informational,
+    ) === true
+  );
+}
+
 const findings = [];
+const skippedInformational = [];
 for (const result of report.results) {
   for (const entry of result.packages ?? []) {
     for (const group of entry.groups ?? []) {
@@ -33,8 +55,17 @@ for (const result of report.results) {
           ? Number.NaN
           : Number(rawSeverity);
       const unscored = ids.length > 0 && !Number.isFinite(severity);
+      const informational =
+        unscored &&
+        ids.every((id) => isInformational(vulnerabilitiesById.get(id)));
 
-      if ((Number.isFinite(severity) && severity >= 7) || unscored) {
+      if (informational) {
+        skippedInformational.push({
+          ids: ids.join(", "),
+          package: `${entry.package?.name ?? "unknown"}@${entry.package?.version ?? "unknown"}`,
+          source: result.source?.path ?? "unknown source",
+        });
+      } else if ((Number.isFinite(severity) && severity >= 7) || unscored) {
         findings.push({
           ids: ids.join(", ") || "unknown advisory",
           package: `${entry.package?.name ?? "unknown"}@${entry.package?.version ?? "unknown"}`,
@@ -47,8 +78,13 @@ for (const result of report.results) {
 }
 
 console.log(
-  `OSV scanned ${expectedLockfiles.length} lockfiles; blocked findings: ${findings.length}`,
+  `OSV scanned ${expectedLockfiles.length} lockfiles; blocked findings: ${findings.length}; skipped informational: ${skippedInformational.length}`,
 );
+for (const skipped of skippedInformational) {
+  console.log(
+    `${skipped.ids}: ${skipped.package} (skipped informational) in ${skipped.source}`,
+  );
+}
 for (const finding of findings) {
   console.error(
     `${finding.ids}: ${finding.package} (severity ${finding.severity}) in ${finding.source}`,

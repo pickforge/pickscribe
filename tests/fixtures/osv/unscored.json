@@ -5,7 +5,13 @@
       "packages": [
         {
           "package": { "name": "unscored-package", "version": "1.0.0" },
-          "groups": [{ "ids": ["OSV-UNSCORED"] }]
+          "groups": [{ "ids": ["OSV-UNSCORED"] }],
+          "vulnerabilities": [
+            {
+              "id": "OSV-UNSCORED",
+              "database_specific": { "severity": "unknown" }
+            }
+          ]
         }
       ]
     },

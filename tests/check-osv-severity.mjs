@@ -22,10 +22,15 @@ assert.match(high.stderr, /OSV-HIGH/);
 const medium = run("medium.json");
 assert.equal(medium.status, 0, medium.stderr);
 
-const unscored = run("unscored.json");
-assert.equal(unscored.status, 1, unscored.stderr);
-assert.match(unscored.stderr, /OSV-UNSCORED/);
-assert.match(unscored.stderr, /severity unscored/);
+const informational = run("informational.json");
+assert.equal(informational.status, 0, informational.stderr);
+assert.match(informational.stdout, /OSV-UNMAINTAINED, OSV-WITHDRAWN/);
+assert.match(informational.stdout, /skipped informational/);
+
+const unscoredNonInformational = run("unscored.json");
+assert.equal(unscoredNonInformational.status, 1, unscoredNonInformational.stderr);
+assert.match(unscoredNonInformational.stderr, /OSV-UNSCORED/);
+assert.match(unscoredNonInformational.stderr, /severity unscored/);
 
 const missingLockfile = run("missing-lockfile.json");
 assert.notEqual(missingLockfile.status, 0);
