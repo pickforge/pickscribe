@@ -60,13 +60,13 @@ pub fn detect_model_path() -> Option<PathBuf> {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if name.starts_with("whisper.cpp-model") {
-                if let Ok(files) = fs::read_dir(entry.path()) {
-                    for file in files.flatten() {
-                        let path = file.path();
-                        if path.extension().is_some_and(|e| e == "bin") {
-                            return Some(path);
-                        }
+            if name.starts_with("whisper.cpp-model")
+                && let Ok(files) = fs::read_dir(entry.path())
+            {
+                for file in files.flatten() {
+                    let path = file.path();
+                    if path.extension().is_some_and(|e| e == "bin") {
+                        return Some(path);
                     }
                 }
             }
@@ -84,10 +84,11 @@ pub fn available_models() -> Vec<PathBuf> {
             for entry in entries.flatten() {
                 let path = entry.path();
                 let name = path.file_name().map(|n| n.to_string_lossy().to_string());
-                if let Some(name) = name {
-                    if name.starts_with("ggml-") && name.ends_with(".bin") {
-                        out.push(path);
-                    }
+                if let Some(name) = name
+                    && name.starts_with("ggml-")
+                    && name.ends_with(".bin")
+                {
+                    out.push(path);
                 }
             }
         }
@@ -245,12 +246,11 @@ pub fn clean_transcript(raw: &str) -> String {
             continue;
         }
         // Leading "[00:00:00.000 --> 00:00:05.000]" style timestamps.
-        if text.starts_with('[') {
-            if let Some(end) = text.find(']') {
-                if text[..end].contains("-->") {
-                    text = text[end + 1..].trim();
-                }
-            }
+        if text.starts_with('[')
+            && let Some(end) = text.find(']')
+            && text[..end].contains("-->")
+        {
+            text = text[end + 1..].trim();
         }
         if text.is_empty() {
             continue;
@@ -266,10 +266,10 @@ pub fn clean_transcript(raw: &str) -> String {
 }
 
 fn shellexpand_home(path: &str) -> String {
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return format!("{home}/{rest}");
-        }
+    if let Some(rest) = path.strip_prefix("~/")
+        && let Ok(home) = std::env::var("HOME")
+    {
+        return format!("{home}/{rest}");
     }
     path.to_string()
 }

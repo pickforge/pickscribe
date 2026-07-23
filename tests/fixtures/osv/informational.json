@@ -1,0 +1,32 @@
+{
+  "results": [
+    {
+      "source": { "path": "Cargo.lock" },
+      "packages": [
+        {
+          "package": { "name": "informational-package", "version": "1.0.0" },
+          "groups": [
+            { "ids": ["OSV-UNMAINTAINED", "OSV-WITHDRAWN"] }
+          ],
+          "vulnerabilities": [
+            {
+              "id": "OSV-UNMAINTAINED",
+              "affected": [
+                {
+                  "database_specific": {
+                    "informational": "unmaintained"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "OSV-WITHDRAWN",
+              "withdrawn": "2026-07-23T00:00:00Z"
+            }
+          ]
+        }
+      ]
+    },
+    { "source": { "path": "bun.lock" }, "packages": [] }
+  ]
+}

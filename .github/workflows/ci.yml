@@ -13,6 +13,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  secrets:
+    name: Secrets scan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks
+        uses: docker://ghcr.io/gitleaks/gitleaks:v8.30.1
+        with:
+          args: git --no-banner --redact
+
+  dependency-audit:
+    name: Dependency audit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Test OSV severity gate
+        run: node tests/check-osv-severity.mjs
+
+      - name: Scan lockfiles with OSV-Scanner
+        uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+        continue-on-error: true
+        with:
+          scan-args: |-
+            --recursive
+            --format=json
+            --output-file=osv-results.json
+            ./
+
+      - name: Block high and critical advisories
+        run: node scripts/check-osv-severity.mjs osv-results.json Cargo.lock bun.lock
+
   check:
     name: Check and build
     runs-on: ubuntu-24.04
@@ -48,6 +83,9 @@ jobs:
       - name: Svelte type check
         run: bun run check
 
+      - name: Frontend lint
+        run: bun run lint
+
       - name: Frontend tests
         run: bun run test
 
@@ -60,10 +98,13 @@ jobs:
       - name: Rust tests
         run: cargo test --workspace --locked --all-targets
 
+      - name: Rust clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
       - name: Rust coverage
         run: |
           mkdir -p target/llvm-cov
-          cargo llvm-cov --workspace --locked --all-targets --fail-under-lines 17 --lcov --output-path target/llvm-cov/lcov.info
+          cargo llvm-cov --workspace --locked --all-targets --fail-under-lines 44 --lcov --output-path target/llvm-cov/lcov.info
           cargo llvm-cov report --html
           cargo llvm-cov report --text --output-path target/llvm-cov/summary.txt
 

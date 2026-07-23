@@ -367,6 +367,8 @@ pub enum RunResult {
 /// progress state (the `RecordingSession` and when to publish it), the
 /// fallback/completion decision, and the final drain. STT execution, live
 /// segment cleanup, and progress transport are the host's job.
+// TODO(#63): split the legacy session driver into capped orchestration helpers.
+#[allow(clippy::too_many_lines)]
 pub fn run(
     host: &mut impl IncrementalHost,
     audio_path: &Path,
@@ -816,15 +818,16 @@ mod tests {
                 .transcripts
                 .pop_front()
                 .unwrap_or_else(|| Ok(String::new()));
-            if let Some(threshold) = state.cancel_after_n_transcriptions {
-                if state.transcribed_jobs.len() >= threshold {
-                    state.control = Control::Cancelled;
-                }
+            if let Some(threshold) = state.cancel_after_n_transcriptions
+                && state.transcribed_jobs.len() >= threshold
+            {
+                state.control = Control::Cancelled;
             }
-            if let Some(threshold) = state.stop_after_n_transcriptions {
-                if state.transcribed_jobs.len() >= threshold && state.control == Control::Continue {
-                    state.control = Control::Stopping;
-                }
+            if let Some(threshold) = state.stop_after_n_transcriptions
+                && state.transcribed_jobs.len() >= threshold
+                && state.control == Control::Continue
+            {
+                state.control = Control::Stopping;
             }
             result
         }

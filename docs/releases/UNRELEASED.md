@@ -65,6 +65,8 @@ then reset this file.
   prompts, response handling, raw fallback, and conservative segment safety.
 - CLI and desktop dictation now share the Linux clipboard, paste-chord, and
   typing-backend delivery strategy.
+- CI now blocks complexity regressions, coverage regressions, leaked secrets,
+  and high or critical dependency advisories.
 
 ## Validation
 
@@ -118,6 +120,9 @@ then reset this file.
   `bun run test`, `bun run test:coverage`,
   `cargo test --workspace --locked --all-targets`, and
   `bun run pickforge-tauri-release validate-config`.
+- CI gate installation: `bun run check`, `bun run lint`, `bun run
+  test:coverage`, `bun run build`, root-package Rust tests, clippy, and
+  llvm-cov, gitleaks, OSV-Scanner, and actionlint.
 
 ### Not tested yet
 

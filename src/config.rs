@@ -152,10 +152,10 @@ pub struct AppConfig {
 }
 
 pub fn config_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
-        if !dir.is_empty() {
-            return PathBuf::from(dir).join("pickscribe");
-        }
+    if let Ok(dir) = std::env::var("XDG_CONFIG_HOME")
+        && !dir.is_empty()
+    {
+        return PathBuf::from(dir).join("pickscribe");
     }
     PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
         .join(".config")
@@ -163,10 +163,10 @@ pub fn config_dir() -> PathBuf {
 }
 
 pub fn data_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("XDG_DATA_HOME") {
-        if !dir.is_empty() {
-            return PathBuf::from(dir).join("pickscribe");
-        }
+    if let Ok(dir) = std::env::var("XDG_DATA_HOME")
+        && !dir.is_empty()
+    {
+        return PathBuf::from(dir).join("pickscribe");
     }
     PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
         .join(".local")
