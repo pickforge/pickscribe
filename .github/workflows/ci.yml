@@ -43,7 +43,7 @@ jobs:
             ./
 
       - name: Block high and critical advisories
-        run: jq --exit-status --raw-output --from-file .github/check-osv-severity.jq osv-results.json
+        run: node scripts/check-osv-severity.mjs osv-results.json Cargo.lock bun.lock
 
   check:
     name: Check and build
