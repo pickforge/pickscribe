@@ -69,7 +69,7 @@ jobs:
       - name: Rust coverage
         run: |
           mkdir -p target/llvm-cov
-          cargo llvm-cov --workspace --locked --all-targets --fail-under-lines 17 --lcov --output-path target/llvm-cov/lcov.info
+          cargo llvm-cov --workspace --locked --all-targets --fail-under-lines 44 --lcov --output-path target/llvm-cov/lcov.info
           cargo llvm-cov report --html
           cargo llvm-cov report --text --output-path target/llvm-cov/summary.txt
 
