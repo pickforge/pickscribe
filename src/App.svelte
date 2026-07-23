@@ -16,6 +16,7 @@
   import FileTranscribe from "./lib/components/FileTranscribe.svelte";
   import ResizeHandles from "./lib/components/ResizeHandles.svelte";
   import Titlebar from "./lib/components/Titlebar.svelte";
+  import { settingsSaveDisplayState } from "./lib/settingsDisplay";
   import Dashboard from "./lib/views/Dashboard.svelte";
   import History from "./lib/views/History.svelte";
   import Settings from "./lib/views/Settings.svelte";
@@ -27,8 +28,10 @@
 
   let view = $state<View>("dashboard");
   let settingsDirty = $state(false);
+  let settingsSaving = $state(false);
   let pendingView = $state<View | null>(null);
   let settingsActions: { save: () => Promise<boolean>; discard: () => void } | null = null;
+  const settingsSaveDisplay = $derived(settingsSaveDisplayState(settingsDirty));
   let dictation = $state<StatePayload>({
     stage: "idle",
     recording_started_ms: null,
@@ -80,6 +83,10 @@
 
   function handleSettingsDirtyChange(dirty: boolean) {
     settingsDirty = dirty;
+  }
+
+  function handleSettingsSavingChange(saving: boolean) {
+    settingsSaving = saving;
   }
 
   function bindSettingsActions(actions: { save: () => Promise<boolean>; discard: () => void }) {
@@ -186,6 +193,7 @@
       {:else}
         <Settings
           onDirtyChange={handleSettingsDirtyChange}
+          onSavingChange={handleSettingsSavingChange}
           bindActions={bindSettingsActions}
         />
       {/if}
@@ -205,6 +213,29 @@
   onViewHistory={() => navigate("history")}
   onBusyChange={(busy) => (fileBusy = busy)}
 />
+
+{#if view === "settings" && settingsSaveDisplay.overlayVisible}
+  <div class="settings-save-overlay glass" role="status" aria-live="polite">
+    <span class="save-dot" aria-hidden="true"></span>
+    <span class="save-text">Unsaved changes</span>
+    <button
+      class="btn btn-ghost btn-sm save-discard"
+      type="button"
+      onclick={() => settingsActions?.discard()}
+    >
+      Discard
+    </button>
+    <button
+      class="btn btn-primary btn-sm"
+      type="button"
+      disabled={settingsSaving}
+      onclick={() => settingsActions?.save()}
+    >
+      <span class="save-label-wide">{settingsSaving ? "Saving…" : "Save changes"}</span>
+      <span class="save-label-compact">{settingsSaving ? "Saving…" : "Save"}</span>
+    </button>
+  </div>
+{/if}
 
 {#if pendingView}
   <div class="dialog-backdrop" role="presentation" onclick={() => (pendingView = null)}>
@@ -382,6 +413,56 @@
     color: var(--bad);
   }
 
+  /*
+   * Rendered here (outside .app / .content) so it stays a fixed-position
+   * child of the viewport instead of the scrolling Settings surface, whose
+   * .fade-up entrance transform would otherwise clip or reposition it. See
+   * issue #45.
+   */
+  .settings-save-overlay {
+    position: fixed;
+    bottom: 48px;
+    right: 28px;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px 10px 16px;
+    border-radius: var(--radius-pill);
+    border-color: color-mix(in srgb, var(--ember) 35%, transparent);
+    box-shadow: var(--glow-ember-soft);
+    animation: settings-save-overlay-in 400ms var(--ease-forge) both;
+  }
+
+  @keyframes settings-save-overlay-in {
+    from {
+      opacity: 0;
+      transform: translateY(16px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .save-dot {
+    width: 4px;
+    height: 9px;
+    border: var(--pf-bracket-width) solid var(--ember);
+    border-right: none;
+    border-radius: 2px 0 0 2px;
+    flex: none;
+  }
+
+  .save-text {
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .save-label-compact {
+    display: none;
+  }
+
   @media (max-width: 700px) {
     .sidebar {
       width: 60px;
@@ -403,6 +484,23 @@
 
     .content {
       padding: 18px 14px 24px;
+    }
+
+    .settings-save-overlay {
+      bottom: 20px;
+      right: 16px;
+      gap: 8px;
+      padding: 10px 14px;
+    }
+
+    .save-text,
+    .save-discard,
+    .save-label-wide {
+      display: none;
+    }
+
+    .save-label-compact {
+      display: inline;
     }
   }
 </style>

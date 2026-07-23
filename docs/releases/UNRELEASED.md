@@ -27,6 +27,17 @@ then reset this file.
 - Settings now change runtime behavior only after persistence succeeds.
   Float-button changes from the tray or capsule stay synchronized with an open Settings form
   without overwriting unrelated unsaved edits.
+- Fixed unsaved Settings actions disappearing at compact window sizes. The
+  save/discard controls now render at the app overlay layer instead of
+  inside the scrolling Settings surface (whose entrance animation made it a
+  `position: fixed` containing block), so they stay visible and unclipped at
+  every supported window size. The header Save button is now visible and
+  disabled while clean, and hidden without shifting layout while dirty;
+  exactly one primary Save action is presented at a time. The dirty-state
+  overlay shows the full unsaved-indicator/Discard/Save dock at wide widths
+  and a labeled Save pill (discard remains reachable via the existing
+  navigation-away guard) at compact widths, matching the app's existing
+  700px sidebar breakpoint.
 
 ## Internal/release changes
 
@@ -46,6 +57,17 @@ then reset this file.
 
 ### Tested
 
+- Issue #45 (unsaved Settings actions at compact sizes, porting the accepted
+  PickGauge #47 pattern): `bun run check`, `vitest run` (33 frontend tests,
+  including a new `settingsSaveDisplayState` characterization suite covering
+  clean/dirty header-visibility and single-action rules), `vitest run
+  --coverage` (ratchet holds), and `bun run build`. PickScribe has no
+  browser-preview/Playwright harness (unlike PickGauge's
+  `scripts/validate-browser-preview.mjs`), so no headless-browser regression
+  at the compact repro sizes was added — flagged as a follow-up decision
+  rather than introducing new test tooling unrequested. Confirmed the same
+  `.content.fade-up` containing-block hazard exists in PickScribe's
+  `App.svelte` as in PickGauge, which the fix addresses the same way.
 - Feature and fix PRs ran their focused frontend and Rust checks before merge.
 - Shared cleanup policy: `cargo test --workspace --locked --all-targets`,
   `bun run build`, and CLI smoke checks for raw output, conservative segments,
