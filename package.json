@@ -15,6 +15,8 @@
   },
   "dependencies": {
     "@pickforge/brand": "0.2.1",
+    "@pickforge/flags": "0.12.0",
+    "@pickforge/tauri-updater": "0.12.0",
     "@tauri-apps/api": "^2.9.0",
     "@tauri-apps/plugin-autostart": "^2.5.0",
     "@tauri-apps/plugin-opener": "^2.5.0",

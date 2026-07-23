@@ -45,6 +45,15 @@ then reset this file.
 
 ## Internal/release changes
 
+- Integrated `@pickforge/tauri-updater` behind the default-off
+  `studioUpdateDialog` release flag. The shared dialog preserves packaged-only,
+  visible-main-window startup checks while excluding hidden login starts and the
+  floating capsule; the existing confirm flow remains active while the flag is
+  off.
+- Added deterministic development fixtures for the shared update dialog at
+  `?update-fixture=available` and `?update-fixture=downloading`. PickScribe has
+  no visual-regression harness, so this keeps visual review reproducible without
+  introducing a new browser-test stack in this PR.
 - Added file-transcription conversion, segmented whisper output, progress,
   TXT/SRT/VTT formatting, and additive history fields for source files and
   segments.
@@ -61,6 +70,12 @@ then reset this file.
 
 ### Tested
 
+- pickforge-platform#36 PR 4 (default-off shared update dialog): `bun run
+  check`, `bunx vitest run` (39 tests, including flag selection,
+  visible/focused deferral, and hidden-autostart single-check coverage), `bun
+  run test:coverage`, and `bun run build`. The full `bun run test` command is
+  blocked before Vitest by the pre-existing `scripts/install.sh` line 154 shell
+  syntax error, unchanged from `origin/main`.
 - Issue #46 (float capsule KDE Alt+Tab exclusion, porting the accepted
   PickGauge #49 fix merged as pickgauge#66): extracted the gating logic in
   `kwin.rs` into a pure `is_kde_wayland_session(xdg_session_type,
@@ -106,6 +121,8 @@ then reset this file.
 
 ### Not tested yet
 
+- Shared update dialog visual fixture review at 1020×720 and 780×560, and the
+  owner-gated signed packaged update smoke.
 - v0.2.0 tagged release build and signed artifacts.
 - Draft AppImage desktop smoke test, including interactive file drag/drop and
   dialog transcription.

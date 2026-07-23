@@ -16,7 +16,10 @@
   import FileTranscribe from "./lib/components/FileTranscribe.svelte";
   import ResizeHandles from "./lib/components/ResizeHandles.svelte";
   import Titlebar from "./lib/components/Titlebar.svelte";
+  import { studioUpdateDialogEnabled } from "./lib/flags";
   import { settingsSaveDisplayState } from "./lib/settingsDisplay";
+  import { mountStudioUpdater } from "./lib/studioUpdater";
+  import { scheduleStartupUpdate } from "./lib/updateStartup";
   import Dashboard from "./lib/views/Dashboard.svelte";
   import History from "./lib/views/History.svelte";
   import Settings from "./lib/views/Settings.svelte";
@@ -100,33 +103,21 @@
 
     const unsubs: Array<() => void> = [];
 
-    // Autostart's "Launch at login" starts the app `--hidden`, which hides the
-    // main window — so a blocking update confirm() must not pop from an
-    // invisible webview. Only this main window runs the check (the float capsule
-    // mounts Float, not App), and only while visible; otherwise defer it until
-    // the window is first shown.
-    let updateCheckDone = false;
-    const runUpdateCheck = () => {
-      if (updateCheckDone) {
-        return;
-      }
-      updateCheckDone = true;
-      void checkForUpdates();
-    };
+    // Autostart's "Launch at login" starts the main window hidden. The float
+    // capsule mounts Float instead of App, and the label guard excludes any
+    // future auxiliary App webviews from owning the process-wide update check.
     const mainWindow = getCurrentWindow();
-    void mainWindow.isVisible().then((visible) => {
-      if (visible) {
-        runUpdateCheck();
-        return;
-      }
-      mainWindow
-        .onFocusChanged(({ payload: focused }) => {
-          if (focused) {
-            runUpdateCheck();
-          }
-        })
-        .then((u) => unsubs.push(u));
-    });
+    if (mainWindow.label === "main") {
+      const studioEnabled = studioUpdateDialogEnabled();
+      const studioUpdater = studioEnabled ? mountStudioUpdater() : undefined;
+      if (studioUpdater) unsubs.push(studioUpdater.destroy);
+      void scheduleStartupUpdate({
+        studioEnabled,
+        window: mainWindow,
+        legacyCheck: checkForUpdates,
+        studioController: studioUpdater?.controller,
+      }).then((unsubscribe) => unsubs.push(unsubscribe));
+    }
 
     let receivedStateEvent = false;
     api
