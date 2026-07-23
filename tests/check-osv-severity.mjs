@@ -32,6 +32,10 @@ assert.equal(unscoredNonInformational.status, 1, unscoredNonInformational.stderr
 assert.match(unscoredNonInformational.stderr, /OSV-UNSCORED/);
 assert.match(unscoredNonInformational.stderr, /severity unscored/);
 
+const mixedInformational = run("mixed-informational.json");
+assert.equal(mixedInformational.status, 1, mixedInformational.stderr);
+assert.match(mixedInformational.stderr, /OSV-MIXED-UNSCORED/);
+
 const missingLockfile = run("missing-lockfile.json");
 assert.notEqual(missingLockfile.status, 0);
 assert.match(missingLockfile.stderr, /missing lockfile: bun\.lock/);

@@ -1,0 +1,32 @@
+{
+  "results": [
+    {
+      "source": { "path": "Cargo.lock" },
+      "packages": [
+        {
+          "package": { "name": "mixed-package", "version": "1.0.0" },
+          "groups": [
+            { "ids": ["OSV-UNMAINTAINED", "OSV-MIXED-UNSCORED"] }
+          ],
+          "vulnerabilities": [
+            {
+              "id": "OSV-UNMAINTAINED",
+              "affected": [
+                {
+                  "database_specific": {
+                    "informational": "unmaintained"
+                  }
+                }
+              ]
+            },
+            {
+              "id": "OSV-MIXED-UNSCORED",
+              "database_specific": { "severity": "unknown" }
+            }
+          ]
+        }
+      ]
+    },
+    { "source": { "path": "bun.lock" }, "packages": [] }
+  ]
+}
