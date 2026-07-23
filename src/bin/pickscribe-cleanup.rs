@@ -201,13 +201,13 @@ fn main() -> Result<()> {
     if args.segment && !outcome.cleaned {
         return Ok(());
     }
-    if !args.segment {
-        if let Some(error) = &outcome.error {
-            warn(
-                &args,
-                format_args!("LLM cleanup failed; using original text: {error}"),
-            );
-        }
+    if !args.segment
+        && let Some(error) = &outcome.error
+    {
+        warn(
+            &args,
+            format_args!("LLM cleanup failed; using original text: {error}"),
+        );
     }
     let final_text = outcome.text.trim().to_owned();
 

@@ -5,6 +5,9 @@ edition = "2024"
 description = "PickScribe desktop app"
 license = "MIT"
 
+[lints]
+workspace = true
+
 [lib]
 name = "pickscribe_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
