@@ -1,0 +1,14 @@
+{
+  "results": [
+    {
+      "source": { "path": "Cargo.lock" },
+      "packages": [
+        {
+          "package": { "name": "unscored-package", "version": "1.0.0" },
+          "groups": [{ "ids": ["OSV-UNSCORED"] }]
+        }
+      ]
+    },
+    { "source": { "path": "bun.lock" }, "packages": [] }
+  ]
+}

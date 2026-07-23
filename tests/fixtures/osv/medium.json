@@ -1,0 +1,14 @@
+{
+  "results": [
+    {
+      "source": { "path": "Cargo.lock" },
+      "packages": [
+        {
+          "package": { "name": "medium-package", "version": "1.0.0" },
+          "groups": [{ "ids": ["OSV-MEDIUM"], "max_severity": "6.9" }]
+        }
+      ]
+    },
+    { "source": { "path": "bun.lock" }, "packages": [] }
+  ]
+}
