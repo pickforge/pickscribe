@@ -63,13 +63,10 @@ fn support_for(os: &str) -> PlatformSupport {
         },
         "macos" => PlatformSupport {
             os: "macos".into(),
-            release_status: ReleaseStatus::Blocked,
+            release_status: ReleaseStatus::ShipsNow,
             dictation_supported: true,
-            summary: "macOS dictation is supported; release is blocked pending Developer ID signing and notarization.".into(),
-            blockers: vec![PlatformBlocker {
-                name: "Signing/notarization".into(),
-                detail: "Developer ID signing and notarization are not configured.".into(),
-            }],
+            summary: "macOS ships unsigned through the install script because Pickforge has no Apple Developer ID; manual browser downloads require right-click Open.".into(),
+            blockers: Vec::new(),
         },
         "windows" => blocked(
             "windows",
@@ -137,7 +134,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn linux_is_the_only_release_target() {
+    fn linux_is_a_release_target() {
         let support = support_for("linux");
 
         assert_eq!(support.release_status, ReleaseStatus::ShipsNow);
@@ -147,18 +144,15 @@ mod tests {
     }
 
     #[test]
-    fn macos_supports_dictation_with_signing_as_its_only_release_blocker() {
+    fn macos_is_an_unsigned_release_target() {
         let support = support_for("macos");
 
-        assert_eq!(support.release_status, ReleaseStatus::Blocked);
+        assert_eq!(support.release_status, ReleaseStatus::ShipsNow);
         assert!(support.dictation_supported);
         assert_eq!(support.unsupported_dictation_message(), None);
-        assert_eq!(support.blockers.len(), 1);
-        assert_eq!(support.blockers[0].name, "Signing/notarization");
-        assert_eq!(
-            support.blockers[0].detail,
-            "Developer ID signing and notarization are not configured."
-        );
+        assert!(support.blockers.is_empty());
+        assert!(support.summary.contains("ships unsigned"));
+        assert!(support.summary.contains("right-click Open"));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 #!/bin/sh
 # PickScribe installer: curl -fsSL https://pickforge.dev/pickscribe/install.sh | sh
-# Downloads the latest signed desktop bundle from GitHub Releases into your home
-# directory. Never uses sudo. Linux-only (AppImage with FUSE fallback).
+# Downloads the latest desktop bundle from GitHub Releases into your home
+# directory. Never uses sudo. Supports Linux and Apple silicon macOS.
 set -eu
 
 REPO="pickforge/pickscribe"
@@ -12,7 +12,7 @@ APP_ID="pickscribe-app"
 WM_CLASS="Pickscribe-app"
 
 # Environment overrides:
-#   PICKSCRIBE_INSTALL_DIR  Linux AppImage target dir. Default: $HOME/.local/bin.
+#   PICKSCRIBE_INSTALL_DIR  Wrapper/AppImage directory. Default: $HOME/.local/bin.
 #   PICKSCRIBE_VERSION      Install a specific release tag, such as v0.1.0.
 #   GITHUB_TOKEN           Optional token for GitHub API rate limits.
 
@@ -28,9 +28,25 @@ preflight() {
     downloader="curl"
   elif command -v wget >/dev/null 2>&1; then
     downloader="wget"
+    wget_https_only=""
+    if wget --help 2>&1 | grep -q -- '--https-only'; then
+      wget_https_only="--https-only"
+    fi
   else
     die "curl or wget is required"
   fi
+}
+
+validate_download_url() {
+  checked_url=$1
+
+  case "$checked_url" in
+    https://github.com/*|https://objects.githubusercontent.com/*|https://release-assets.githubusercontent.com/*)
+      ;;
+    *)
+      die "release asset URL has an unsupported host: $checked_url"
+      ;;
+  esac
 }
 
 fetch_stdout() {
@@ -48,9 +64,9 @@ fetch_stdout() {
 
   if [ -z "${GITHUB_TOKEN:-}" ] || [ "$can_send_github_token" -ne 1 ]; then
     if [ "$downloader" = "curl" ]; then
-      curl -fsSL -H "$accept" "$fetch_url"
+      curl -fsSL --proto '=https' --proto-redir '=https' -H "$accept" "$fetch_url"
     else
-      wget -qO- --header="$accept" "$fetch_url"
+      wget -qO- ${wget_https_only:+"$wget_https_only"} --header="$accept" "$fetch_url"
     fi
     return
   fi
@@ -60,7 +76,7 @@ fetch_stdout() {
   # private temp file removed even if the fetch is interrupted.
   if [ "$downloader" = "curl" ]; then
     printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" |
-      curl -fsSL -H "$accept" -K - "$fetch_url"
+      curl -fsSL --proto '=https' --proto-redir '=https' -H "$accept" -K - "$fetch_url"
     return
   fi
 
@@ -69,7 +85,7 @@ fetch_stdout() {
   trap 'rm -f "$auth_conf"' EXIT INT TERM
   printf 'header = Authorization: Bearer %s\n' "$GITHUB_TOKEN" > "$auth_conf"
   fetch_status=0
-  wget -qO- --config="$auth_conf" --header="$accept" "$fetch_url" || fetch_status=$?
+  wget -qO- ${wget_https_only:+"$wget_https_only"} --config="$auth_conf" --header="$accept" "$fetch_url" || fetch_status=$?
   rm -f "$auth_conf"
   return "$fetch_status"
 }
@@ -78,10 +94,11 @@ download_to() {
   download_url=$1
   download_dest=$2
 
+  validate_download_url "$download_url"
   if [ "$downloader" = "curl" ]; then
-    curl -fsSL "$download_url" -o "$download_dest"
+    curl -fsSL --proto '=https' --proto-redir '=https' "$download_url" -o "$download_dest"
   else
-    wget -qO "$download_dest" "$download_url"
+    wget -qO "$download_dest" ${wget_https_only:+"$wget_https_only"} "$download_url"
   fi
 }
 
@@ -91,21 +108,40 @@ detect_platform() {
 
   case "$os_name" in
     Linux)
+      platform="linux"
+      case "$cpu_arch" in
+        x86_64|amd64)
+          arch_pattern="(amd64|x86_64)"
+          ;;
+        aarch64|arm64)
+          arch_pattern="(aarch64|arm64)"
+          ;;
+        *)
+          die "unsupported Linux CPU architecture: $cpu_arch"
+          ;;
+      esac
+      ;;
+    Darwin)
+      platform="macos"
+      case "$cpu_arch" in
+        arm64|aarch64)
+          arch_pattern="(aarch64|arm64)"
+          ;;
+        x86_64|amd64)
+          if command -v sysctl >/dev/null 2>&1 &&
+            [ "$(sysctl -in sysctl.proc_translated 2>/dev/null || printf '0')" = "1" ]; then
+            arch_pattern="(aarch64|arm64)"
+          else
+            die "PickScribe for macOS currently ships Apple silicon (aarch64) only; Intel x86_64 is not supported."
+          fi
+          ;;
+        *)
+          die "unsupported macOS CPU architecture: $cpu_arch"
+          ;;
+      esac
       ;;
     *)
-      die "PickScribe currently ships Linux only. macOS/Windows releases are blocked until native audio, paste, shortcut, window, signing, and smoke-test support lands."
-      ;;
-  esac
-
-  case "$cpu_arch" in
-    x86_64|amd64)
-      arch_pattern="(amd64|x86_64)"
-      ;;
-    aarch64|arm64)
-      arch_pattern="(aarch64|arm64)"
-      ;;
-    *)
-      die "unsupported CPU architecture: $cpu_arch"
+      die "unsupported operating system: $os_name. PickScribe currently ships for Linux and Apple silicon macOS."
       ;;
   esac
 }
@@ -147,22 +183,28 @@ resolve_release() {
     die "no release download assets found for $ref_name. If GitHub API rate limits you, set GITHUB_TOKEN. See https://github.com/${REPO}/releases"
   fi
 
-  asset_url=$(printf '%s\n' "$download_urls" | while IFS= read -r candidate_url; do
+  asset_url=""
+  for candidate_url in $download_urls; do
+    validate_download_url "$candidate_url"
     candidate_name=${candidate_url##*/}
 
-    case "$candidate_name" in
-      *.AppImage) ;;
-      *) continue ;;
+    case "$platform:$candidate_name" in
+      linux:*.AppImage|macos:*.app.tar.gz)
+        :
+        ;;
+      *)
+        continue
+        ;;
     esac
 
     if printf '%s\n' "$candidate_name" | grep -Eiq "$arch_pattern"; then
-      printf '%s\n' "$candidate_url"
+      asset_url=$candidate_url
       break
     fi
-  done)
+  done
 
   if [ -z "$asset_url" ]; then
-    die "no AppImage bundle for $cpu_arch in $ref_name. See https://github.com/${REPO}/releases"
+    die "no $platform bundle for $cpu_arch in $ref_name. See https://github.com/${REPO}/releases"
   fi
 }
 
@@ -270,8 +312,10 @@ ensure_replaceable_command_path() {
   if [ ! -e "$command_path" ] && [ ! -L "$command_path" ]; then
     return 0
   fi
-  if [ -f "$command_path" ] &&
-    grep -q 'PickScribe AppImage launcher generated by the PickScribe installer' "$command_path" 2>/dev/null; then
+  if [ -f "$command_path" ] && {
+    grep -q 'PickScribe launcher generated by the PickScribe installer' "$command_path" 2>/dev/null ||
+      grep -q 'PickScribe AppImage launcher generated by the PickScribe installer' "$command_path" 2>/dev/null
+  }; then
     return 0
   fi
   if [ -L "$command_path" ]; then
@@ -340,6 +384,143 @@ path_has_dir() {
   esac
 }
 
+is_pickscribe_bundle() {
+  checked_app=$1
+  checked_plist="$checked_app/Contents/Info.plist"
+
+  [ -f "$checked_app/Contents/MacOS/$BIN_NAME" ] && return 0
+  [ -f "$checked_plist" ] || return 1
+
+  bundle_identifier=""
+  if [ -x /usr/libexec/PlistBuddy ]; then
+    bundle_identifier=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$checked_plist" 2>/dev/null || true)
+  elif command -v plutil >/dev/null 2>&1; then
+    bundle_identifier=$(plutil -extract CFBundleIdentifier raw -o - "$checked_plist" 2>/dev/null || true)
+  fi
+  [ "$bundle_identifier" = "com.pickforge.pickscribe" ]
+}
+
+validate_macos_archive() {
+  archive_members="$tmp/archive-members"
+  tar -tzf "$asset_path" > "$archive_members" || die "failed to list $asset_name"
+  [ -s "$archive_members" ] || die "$asset_name is empty"
+
+  while IFS= read -r archive_member; do
+    case "$archive_member" in
+      /*|..|../*|*/..|*/../*)
+        die "$asset_name contains an unsafe path: $archive_member"
+        ;;
+      PickScribe.app|PickScribe.app/*)
+        ;;
+      *)
+        die "$asset_name contains a file outside PickScribe.app: $archive_member"
+        ;;
+    esac
+  done < "$archive_members"
+}
+
+rollback_macos_app() {
+  [ -n "${macos_backup_path:-}" ] || return 0
+  [ -e "$macos_backup_path" ] || return 0
+
+  rollback_new_path="$tmp/failed-PickScribe.app"
+  if [ -e "$macos_app_path" ]; then
+    mv "$macos_app_path" "$rollback_new_path" || return 1
+  fi
+  if mv "$macos_backup_path" "$macos_app_path"; then
+    macos_backup_path=""
+    return 0
+  fi
+  if [ -e "$rollback_new_path" ]; then
+    mv "$rollback_new_path" "$macos_app_path" 2>/dev/null || true
+  fi
+  return 1
+}
+
+cleanup() {
+  cleanup_status=$?
+  trap - EXIT HUP INT TERM
+  preserve_tmp=0
+
+  if ! rollback_macos_app; then
+    printf '%s\n' "failed to restore the previous PickScribe app; recovery files remain in $tmp" >&2
+    cleanup_status=1
+    preserve_tmp=1
+  fi
+  if [ "$preserve_tmp" -eq 0 ] && [ -n "${tmp:-}" ]; then
+    rm -rf "$tmp"
+  fi
+  exit "$cleanup_status"
+}
+
+write_macos_wrapper() {
+  command_path=$1
+  bundle_binary=$2
+  quoted_bundle_binary=$(printf '%s' "$bundle_binary" | sed "s/'/'\\\\''/g")
+
+  {
+    printf '#!/bin/sh\n'
+    printf '# PickScribe launcher generated by the PickScribe installer.\n'
+    printf 'set -eu\n'
+    printf "bundle_binary='%s'\n" "$quoted_bundle_binary"
+    printf 'if [ ! -x "$bundle_binary" ]; then\n'
+    printf '  printf '"'"'PickScribe app binary not found or not executable: %%s\\n'"'"' "$bundle_binary" >&2\n'
+    printf '  exit 127\n'
+    printf 'fi\n'
+    printf 'exec "$bundle_binary" "$@"\n'
+  } > "$command_path"
+  chmod +x "$command_path"
+}
+
+install_macos_app() {
+  install_dir="${PICKSCRIBE_INSTALL_DIR:-$HOME/.local/bin}"
+  applications_dir="$HOME/Applications"
+  app_path="$applications_dir/$APP_NAME.app"
+  extracted_dir="$tmp/extracted"
+  extracted_app="$extracted_dir/$APP_NAME.app"
+  bundle_binary="$app_path/Contents/MacOS/$BIN_NAME"
+  command_path="$install_dir/$BIN_NAME"
+
+  path_must_be_in_home "$install_dir"
+  path_must_be_in_home "$applications_dir"
+  mkdir -p "$install_dir" "$applications_dir" "$extracted_dir"
+  [ ! -d "$command_path" ] || die "command path is a directory: $command_path"
+  ensure_replaceable_command_path "$command_path"
+  validate_macos_archive
+  tar -xzf "$asset_path" -C "$extracted_dir" || die "failed to extract $asset_name"
+  [ -d "$extracted_app" ] || die "$asset_name does not contain $APP_NAME.app"
+  [ -x "$extracted_app/Contents/MacOS/$BIN_NAME" ] ||
+    die "$asset_name does not contain an executable Contents/MacOS/$BIN_NAME"
+  [ ! -e "$app_path" ] || [ -d "$app_path" ] || die "install destination is not an app bundle: $app_path"
+  if [ -e "$app_path" ] && ! is_pickscribe_bundle "$app_path"; then
+    die "$app_path is not an existing PickScribe bundle; remove it manually before installing"
+  fi
+
+  macos_app_path="$app_path"
+  macos_backup_path=""
+  if [ -e "$app_path" ]; then
+    macos_backup_path="$app_path.backup.$$"
+    [ ! -e "$macos_backup_path" ] || die "backup path already exists; remove it manually: $macos_backup_path"
+    mv "$app_path" "$macos_backup_path" || die "failed to back up the existing PickScribe app"
+  fi
+  mv "$extracted_app" "$app_path" || die "failed to install the new PickScribe app"
+  if [ -n "$macos_backup_path" ]; then
+    rm -rf "$macos_backup_path" || die "failed to remove the previous PickScribe app backup"
+    macos_backup_path=""
+  fi
+  remove_replaceable_command_path "$command_path"
+  write_macos_wrapper "$command_path" "$bundle_binary"
+  if command -v xattr >/dev/null 2>&1; then
+    xattr -dr com.apple.quarantine "$app_path" >/dev/null 2>&1 || true
+  fi
+
+  printf '%s %s installed to %s.\n' "$APP_NAME" "$release_tag" "$app_path"
+  if ! path_has_dir "$install_dir"; then
+    printf 'Note: %s is not on PATH. Add it to launch with `%s`.\n' "$install_dir" "$BIN_NAME"
+  fi
+  printf 'Launch with `%s` or open %s.\n' "$BIN_NAME" "$app_path"
+}
+
 install_appimage() {
   install_dir="${PICKSCRIBE_INSTALL_DIR:-$HOME/.local/bin}"
   appimage_path="$install_dir/$APP_NAME.AppImage"
@@ -372,9 +553,17 @@ main() {
   detect_platform
   resolve_release
   make_tmp_dir
-  trap 'rm -rf "$tmp"' EXIT INT TERM
+  macos_backup_path=""
+  trap cleanup EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   download_asset
-  install_appimage
+  if [ "$platform" = "macos" ]; then
+    install_macos_app
+  else
+    install_appimage
+  fi
 }
 
 main "$@"

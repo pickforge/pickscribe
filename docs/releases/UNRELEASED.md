@@ -6,10 +6,12 @@ then reset this file.
 
 ## User-facing changes
 
-- macOS dictation is now enabled end to end, with native cue playback and
-  appearance-aware tray icons. The macOS release remains blocked only on
-  Developer ID signing and notarization, and the local whisper.cpp installer
-  now supports Homebrew installs and portable build tooling on macOS.
+- macOS dictation now ships for Apple silicon through the same no-sudo install
+  script as Linux, with native cue playback and appearance-aware tray icons.
+  Distribution is intentionally unsigned because Pickforge has no Apple
+  Developer ID; script installs avoid Gatekeeper quarantine, while browser
+  downloads require right-click Open or clearing the quarantine xattr. The
+  local whisper.cpp installer supports Homebrew and portable build tooling.
 - On macOS, PickScribe can now start and stop dictation with a configurable
   in-app global shortcut (Cmd+Shift+Space by default). Linux continues to use
   the existing desktop-environment keybinding path.
@@ -54,6 +56,11 @@ then reset this file.
 
 ## Internal/release changes
 
+- Added unsigned Apple silicon `.app.tar.gz` packaging and updater artifacts to
+  the release workflow, with a combined Linux/macOS `latest.json`. Extended the
+  installer with idempotent `~/Applications/PickScribe.app` updates and fixed
+  issue #57 by removing the Bash 3.2 parser-incompatible case statement nested
+  in command substitution.
 - Integrated `@pickforge/tauri-updater` behind the default-off
   `studioUpdateDialog` release flag. The shared dialog preserves packaged-only,
   visible-main-window startup checks while excluding hidden login starts and the
@@ -107,6 +114,16 @@ then reset this file.
 
 ### Tested
 
+- Issue #66 PR 6 (unsigned macOS packaging): `/bin/sh -n scripts/install.sh`,
+  `bun run test` (installer smoke plus 42 frontend tests), `cargo test` (123 +
+  10 + 7 passing, 1 ignored), `cargo check` in `src-tauri`, `actionlint`, and
+  ShellCheck warning-level checks pass on Apple silicon macOS. The signed
+  `bun run tauri build --bundles app` reached the updater packaging step and
+  failed only because the local environment has no `TAURI_SIGNING_PRIVATE_KEY`;
+  retrying with updater artifacts disabled produced `PickScribe.app`, ad-hoc
+  signed by Tauri. A synthetic release set verified that
+  `pickforge-tauri-release` generates one manifest containing both
+  `linux-x86_64` and `darwin-aarch64`.
 - Whisper model auto-detection fix: `cargo test` and `cargo clippy --workspace
   --all-targets -- -D warnings`. Live-verified the installed
   `~/.local/share/whisper.cpp/models/ggml-base.en.bin` model is selected.
