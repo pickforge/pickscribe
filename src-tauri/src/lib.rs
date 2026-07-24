@@ -849,10 +849,9 @@ fn clamp_float_window_size(window: &tauri::WebviewWindow) {
     ));
 }
 
-// TODO(#63): split legacy application setup into capped helpers.
-#[allow(clippy::too_many_lines)]
-pub fn run() {
-    let context = tauri::generate_context!();
+fn init_sentry(
+    context: &tauri::Context,
+) -> (sentry::ClientInitGuard, tauri::plugin::TauriPlugin<tauri::Wry>) {
     let cfg = AppConfig::load();
     let sentry_enabled = settings::sentry_client_enabled(&cfg);
     let release = format!(
@@ -890,6 +889,57 @@ pub fn run() {
     } else {
         tauri_plugin_sentry::init_with_no_injection(&sentry_client)
     };
+    (sentry_client, sentry_plugin)
+}
+
+fn setup_app(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    tray::setup(app)?;
+    let cfg = AppConfig::load();
+    ensure_float_window(app.handle(), cfg.general.float_button);
+    if let Err(err) = shortcut::register_startup(app.handle(), &cfg.shortcut.toggle) {
+        eprintln!("{err}");
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(window) = app.get_webview_window("main") {
+        fix_csd_titlebar_input(&window);
+    }
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--hidden")
+        && let Some(window) = app.get_webview_window("main")
+    {
+        let _ = window.hide();
+    }
+    if args.iter().any(|a| a == "--toggle") {
+        let handle = app.handle().clone();
+        let engine = engine::engine(&handle);
+        engine.set_chord_override(parse_chord_arg(&args));
+        engine.toggle(&handle);
+    }
+    Ok(())
+}
+
+fn handle_run_event(app_handle: &tauri::AppHandle, event: tauri::RunEvent) {
+    match event {
+        tauri::RunEvent::WindowEvent {
+            label,
+            event: WindowEvent::CloseRequested { api, .. },
+            ..
+        } if label == "main" => {
+            api.prevent_close();
+            if let Some(window) = app_handle.get_webview_window("main") {
+                let _ = window.hide();
+            }
+        }
+        tauri::RunEvent::ExitRequested { code: None, api, .. } => {
+            api.prevent_exit();
+        }
+        _ => {}
+    }
+}
+
+pub fn run() {
+    let context = tauri::generate_context!();
+    let (_sentry_client, sentry_plugin) = init_sentry(&context);
     let engine = Arc::new(Engine::new().expect("failed to open PickScribe data directory"));
 
     let builder = tauri::Builder::default()
@@ -952,47 +1002,8 @@ pub fn run() {
             copy_text,
             show_main_window,
         ])
-        .setup(|app| {
-            tray::setup(app)?;
-            let cfg = AppConfig::load();
-            ensure_float_window(app.handle(), cfg.general.float_button);
-            if let Err(err) = shortcut::register_startup(app.handle(), &cfg.shortcut.toggle) {
-                eprintln!("{err}");
-            }
-            #[cfg(target_os = "linux")]
-            if let Some(window) = app.get_webview_window("main") {
-                fix_csd_titlebar_input(&window);
-            }
-            let args: Vec<String> = std::env::args().collect();
-            if args.iter().any(|a| a == "--hidden")
-                && let Some(window) = app.get_webview_window("main")
-            {
-                let _ = window.hide();
-            }
-            if args.iter().any(|a| a == "--toggle") {
-                let handle = app.handle().clone();
-                let engine = engine::engine(&handle);
-                engine.set_chord_override(parse_chord_arg(&args));
-                engine.toggle(&handle);
-            }
-            Ok(())
-        })
+        .setup(setup_app)
         .build(context)
         .expect("error while building PickScribe")
-        .run(|app_handle, event| match event {
-            tauri::RunEvent::WindowEvent {
-                label,
-                event: WindowEvent::CloseRequested { api, .. },
-                ..
-            } if label == "main" => {
-                api.prevent_close();
-                if let Some(window) = app_handle.get_webview_window("main") {
-                    let _ = window.hide();
-                }
-            }
-            tauri::RunEvent::ExitRequested { code: None, api, .. } => {
-                api.prevent_exit();
-            }
-            _ => {}
-        });
+        .run(handle_run_event);
 }

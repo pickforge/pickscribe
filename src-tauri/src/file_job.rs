@@ -123,8 +123,6 @@ fn validate_input_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
-// TODO(#63): split legacy file-job orchestration into capped helpers.
-#[allow(clippy::too_many_lines)]
 fn run_file_job(
     engine: Arc<Engine>,
     app: AppHandle,
@@ -138,97 +136,15 @@ fn run_file_job(
         let dir = create_temp_dir()?;
         guard.set_temp_dir(dir.clone());
         let wav = dir.join("audio.wav");
-        let cfg = AppConfig::load();
-
-        if cancel_token.is_cancelled() {
-            bail!("file transcription cancelled");
-        }
-        emit_state(&app, FileStage::Converting, 0, &source_file, None, None);
-        media::convert_to_wav_16k_mono(Path::new(&source_file), &wav, || {
-            cancel_token.is_cancelled()
-        })?;
-        if cancel_token.is_cancelled() {
-            bail!("file transcription cancelled");
-        }
-
-        let duration_ms = media::wav_duration_ms(&wav)?;
-        emit_state(&app, FileStage::Transcribing, 0, &source_file, None, None);
-        let progress_for_callback = Arc::clone(&progress);
-        let app_for_callback = app.clone();
-        let source_for_callback = source_file.clone();
-        let segments = stt::transcribe_file_with_cancel(
-            &cfg.stt,
+        execute_file_job(
+            &engine,
+            &app,
             &wav,
-            || cancel_token.is_cancelled(),
-            move |percentage| {
-                if progress_for_callback.swap(percentage, Ordering::Relaxed) != percentage {
-                    emit_state(
-                        &app_for_callback,
-                        FileStage::Transcribing,
-                        percentage,
-                        &source_for_callback,
-                        None,
-                        None,
-                    );
-                }
-            },
-        )?;
-        if cancel_token.is_cancelled() {
-            bail!("file transcription cancelled");
-        }
-
-        let raw_text = transcript::to_txt(&segments);
-        if raw_text.is_empty() {
-            bail!("no speech detected in the file");
-        }
-        let (cleaned_text, provider, model, cleanup_error) = if cleanup_requested {
-            emit_state(
-                &app,
-                FileStage::Cleaning,
-                progress.load(Ordering::Relaxed),
-                &source_file,
-                None,
-                None,
-            );
-            let outcome = cleanup::clean(&cfg, &raw_text);
-            if cancel_token.is_cancelled() {
-                bail!("file transcription cancelled");
-            }
-            (
-                (outcome.text != raw_text).then_some(outcome.text),
-                outcome.provider,
-                outcome.model,
-                outcome
-                    .error
-                    .map(|error| format!("cleanup skipped: {error}")),
-            )
-        } else {
-            (None, "none".to_string(), String::new(), None)
-        };
-        let segments_json = if segments.is_empty() {
-            None
-        } else {
-            Some(serde_json::to_string(&segments).context("serializing file segments")?)
-        };
-        if cancel_token.is_cancelled() {
-            bail!("file transcription cancelled");
-        }
-
-        let entry_id = engine.history.insert(&NewEntry {
-            duration_ms,
-            raw_text,
-            cleaned_text,
-            provider,
-            model,
-            language: cfg.stt.language,
-            source_file: Some(source_file.clone()),
-            segments_json,
-        })?;
-        let _ = app.emit(EVENT_HISTORY, ());
-        Ok(FileJobComplete {
-            entry_id,
-            cleanup_error,
-        })
+            &source_file,
+            cleanup_requested,
+            &cancel_token,
+            &progress,
+        )
     })();
 
     match result {
@@ -262,6 +178,138 @@ fn run_file_job(
 struct FileJobComplete {
     entry_id: i64,
     cleanup_error: Option<String>,
+}
+
+fn execute_file_job(
+    engine: &Engine,
+    app: &AppHandle,
+    wav: &Path,
+    source_file: &str,
+    cleanup_requested: bool,
+    cancel_token: &CancelToken,
+    progress: &Arc<AtomicU8>,
+) -> Result<FileJobComplete> {
+    let cfg = AppConfig::load();
+    let (duration_ms, segments) =
+        convert_and_transcribe(&cfg, wav, source_file, cancel_token, app, progress)?;
+
+    let raw_text = transcript::to_txt(&segments);
+    if raw_text.is_empty() {
+        bail!("no speech detected in the file");
+    }
+    let (cleaned_text, provider, model, cleanup_error) = clean_transcript_if_requested(
+        &cfg,
+        &raw_text,
+        cleanup_requested,
+        cancel_token,
+        app,
+        source_file,
+        progress,
+    )?;
+    let segments_json = if segments.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&segments).context("serializing file segments")?)
+    };
+    if cancel_token.is_cancelled() {
+        bail!("file transcription cancelled");
+    }
+
+    let entry_id = engine.history.insert(&NewEntry {
+        duration_ms,
+        raw_text,
+        cleaned_text,
+        provider,
+        model,
+        language: cfg.stt.language,
+        source_file: Some(source_file.to_string()),
+        segments_json,
+    })?;
+    let _ = app.emit(EVENT_HISTORY, ());
+    Ok(FileJobComplete {
+        entry_id,
+        cleanup_error,
+    })
+}
+
+fn convert_and_transcribe(
+    cfg: &AppConfig,
+    wav: &Path,
+    source_file: &str,
+    cancel_token: &CancelToken,
+    app: &AppHandle,
+    progress: &Arc<AtomicU8>,
+) -> Result<(i64, Vec<transcript::FileSegment>)> {
+    if cancel_token.is_cancelled() {
+        bail!("file transcription cancelled");
+    }
+    emit_state(app, FileStage::Converting, 0, source_file, None, None);
+    media::convert_to_wav_16k_mono(Path::new(source_file), wav, || cancel_token.is_cancelled())?;
+    if cancel_token.is_cancelled() {
+        bail!("file transcription cancelled");
+    }
+
+    let duration_ms = media::wav_duration_ms(wav)?;
+    emit_state(app, FileStage::Transcribing, 0, source_file, None, None);
+    let progress_for_callback = Arc::clone(progress);
+    let app_for_callback = app.clone();
+    let source_for_callback = source_file.to_string();
+    let segments = stt::transcribe_file_with_cancel(
+        &cfg.stt,
+        wav,
+        || cancel_token.is_cancelled(),
+        move |percentage| {
+            if progress_for_callback.swap(percentage, Ordering::Relaxed) != percentage {
+                emit_state(
+                    &app_for_callback,
+                    FileStage::Transcribing,
+                    percentage,
+                    &source_for_callback,
+                    None,
+                    None,
+                );
+            }
+        },
+    )?;
+    if cancel_token.is_cancelled() {
+        bail!("file transcription cancelled");
+    }
+    Ok((duration_ms, segments))
+}
+
+fn clean_transcript_if_requested(
+    cfg: &AppConfig,
+    raw_text: &str,
+    cleanup_requested: bool,
+    cancel_token: &CancelToken,
+    app: &AppHandle,
+    source_file: &str,
+    progress: &Arc<AtomicU8>,
+) -> Result<(Option<String>, String, String, Option<String>)> {
+    if cleanup_requested {
+        emit_state(
+            app,
+            FileStage::Cleaning,
+            progress.load(Ordering::Relaxed),
+            source_file,
+            None,
+            None,
+        );
+        let outcome = cleanup::clean(cfg, raw_text);
+        if cancel_token.is_cancelled() {
+            bail!("file transcription cancelled");
+        }
+        Ok((
+            (outcome.text != raw_text).then_some(outcome.text),
+            outcome.provider,
+            outcome.model,
+            outcome
+                .error
+                .map(|error| format!("cleanup skipped: {error}")),
+        ))
+    } else {
+        Ok((None, "none".to_string(), String::new(), None))
+    }
 }
 
 fn create_temp_dir() -> Result<PathBuf> {
