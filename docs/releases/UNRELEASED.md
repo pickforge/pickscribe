@@ -80,6 +80,19 @@ then reset this file.
   macOS, `pw-record` on Linux) before the dictation-support early return.
   Added `src-tauri/Info.plist` with `NSMicrophoneUsageDescription`, which
   Tauri 2 merges into the generated macOS bundle `Info.plist`.
+- Added macOS text delivery through OS-shipped subprocesses: clipboard copy
+  via `pbcopy`, and hotkey paste / typing via `osascript` (System Events),
+  reusing the existing Linux `ProcessRuntime` seam with no new engine-crate
+  dependencies. Auto delivery resolves to the paste-chord hotkey on macOS.
+  Failures caused by a missing Accessibility grant now surface a clear
+  message pointing at System Settings → Privacy & Security → Accessibility
+  instead of the raw System Events error. Doctor's "Clipboard" and "Paste
+  backend" checks are now platform-aware (`pbcopy` / Accessibility-trust on
+  macOS, `wl-copy`/`xclip`/`xsel` / `ydotool`+socket on Linux, unchanged) and
+  now run for macOS too. Removed the "Paste automation" release blocker for
+  macOS; dictation still isn't a supported release target there pending the
+  other blockers (native audio capture, global shortcuts, tray/window
+  validation, signing, smoke tests).
 
 ## Validation
 
@@ -99,6 +112,21 @@ then reset this file.
   too-short threshold. No macOS TCC microphone permission prompt appeared;
   Terminal already had mic authorization on this machine from an earlier
   `-list_devices` probe.
+- pickscribe#66 PR 3 (macOS text delivery): `cargo test` (root, 108/108 +
+  10/10 + 7/7 passing), `cargo test --manifest-path src-tauri/Cargo.toml`
+  (37/37 passing), and `cargo clippy --workspace --all-targets -- -D
+  warnings` (clean), all on macOS. Live smoke on this macOS machine: the
+  real `ProcessRuntime::copy_to_clipboard` macOS path piped a marker string
+  through `pbcopy` and read it back with `pbpaste` — round-tripped
+  correctly (kept as an `#[ignore]`d regression test, run manually with
+  `--ignored`). Did not exercise `osascript` keystroke synthesis (paste
+  chord / typing) live, to avoid sending real keystrokes into the active
+  session; also skipped the proposed harmless `osascript -e '... count
+  processes'` probe because it would trigger a first-run System Events
+  automation-permission dialog, which is itself a disturbance on a live
+  machine — both are covered instead by unit tests against the
+  `DeliveryRuntime` seam and the pure script-building/error-mapping
+  functions.
 - Issue #59 (macOS compile support and CI): `cargo check --manifest-path
   src-tauri/Cargo.toml`, `cargo test --manifest-path src-tauri/Cargo.toml` (37
   tests), `bun install --frozen-lockfile && bun run check`, `bun run lint`, and

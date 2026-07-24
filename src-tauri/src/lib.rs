@@ -2,6 +2,7 @@ mod engine;
 mod file_job;
 mod kwin;
 mod lifecycle;
+mod macos;
 mod settings;
 mod tray;
 
@@ -459,6 +460,9 @@ fn run_doctor_checks() -> Vec<DoctorCheck> {
     if let Some((ok, detail)) = audio_recorder_check(&support.os) {
         push("Audio recorder", ok, detail);
     }
+    for (name, ok, detail) in delivery_backend_checks(&support.os) {
+        push(name, ok, detail);
+    }
     if !support.dictation_supported {
         return checks;
     }
@@ -476,28 +480,6 @@ fn run_doctor_checks() -> Vec<DoctorCheck> {
             "no ggml model in ~/.local/share/whisper.cpp/models".into(),
         ),
     }
-    let ydotool = command_exists("ydotool");
-    let socket = std::env::var("YDOTOOL_SOCKET")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "/tmp/.ydotool_socket".into());
-    let socket_ok = std::path::Path::new(&socket).exists();
-    push(
-        "Paste backend",
-        ydotool && socket_ok,
-        if !ydotool {
-            "ydotool not installed".into()
-        } else if !socket_ok {
-            "ydotool installed, but ydotool.service socket not found".into()
-        } else {
-            "ydotool + ydotoold socket".into()
-        },
-    );
-    push(
-        "Clipboard",
-        command_exists("wl-copy") || command_exists("xclip") || command_exists("xsel"),
-        "wl-copy / xclip / xsel".into(),
-    );
     let cleanup_policy = cleanup::CleanupPolicy::from_app_config(&cfg);
     let (cleanup_ok, cleanup_detail) = if cleanup_policy.provider == "none" {
         (true, "cleanup disabled — raw transcript is pasted".into())
@@ -530,6 +512,52 @@ fn run_doctor_checks() -> Vec<DoctorCheck> {
         );
     }
     checks
+}
+
+/// Clipboard + paste-backend doctor checks, platform-aware: macOS delivers
+/// via `pbcopy`/`osascript` (System Events) and needs Accessibility access;
+/// Linux delivers via wl-copy/xclip/xsel and ydotool.
+fn delivery_backend_checks(os: &str) -> Vec<(&'static str, bool, String)> {
+    if os == "macos" {
+        let trusted = macos::accessibility_trusted();
+        vec![
+            ("Clipboard", command_exists("pbcopy"), "pbcopy".into()),
+            (
+                "Paste backend",
+                trusted,
+                if trusted {
+                    "osascript (System Events) — Accessibility granted".into()
+                } else {
+                    "Accessibility not granted — enable PickScribe in System Settings \u{2192} Privacy & Security \u{2192} Accessibility, then relaunch".into()
+                },
+            ),
+        ]
+    } else {
+        let ydotool = command_exists("ydotool");
+        let socket = std::env::var("YDOTOOL_SOCKET")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "/tmp/.ydotool_socket".into());
+        let socket_ok = std::path::Path::new(&socket).exists();
+        vec![
+            (
+                "Paste backend",
+                ydotool && socket_ok,
+                if !ydotool {
+                    "ydotool not installed".into()
+                } else if !socket_ok {
+                    "ydotool installed, but ydotool.service socket not found".into()
+                } else {
+                    "ydotool + ydotoold socket".into()
+                },
+            ),
+            (
+                "Clipboard",
+                command_exists("wl-copy") || command_exists("xclip") || command_exists("xsel"),
+                "wl-copy / xclip / xsel".into(),
+            ),
+        ]
+    }
 }
 
 #[tauri::command]
