@@ -7,6 +7,12 @@ import { join } from "node:path";
 const repoRoot = new URL("..", import.meta.url).pathname;
 const installer = join(repoRoot, "scripts", "install.sh");
 
+// Deliberately excludes the host's own PATH (eg. Homebrew's /opt/homebrew/bin):
+// tests must not pass or fail depending on whether the developer's machine
+// happens to have a real minisign/rsign installed. Verifier presence is
+// controlled per test via fakebin.
+const STANDARD_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
+
 function makeTempRoot(name) {
   const root = execFileSync("mktemp", ["-d", join(tmpdir(), `${name}.XXXXXX`)], {
     encoding: "utf8",
@@ -39,7 +45,16 @@ exit 0
 `,
   );
   writeMacBundleFixture(fixture, "first bundle");
+  writeSignatureFixtures(fixture);
   return fixture;
+}
+
+// The real installer decodes `<asset>.sig` as base64 before handing it to
+// minisign/rsign. Content doesn't matter here since the fake verifier below
+// never actually parses it -- it only needs to decode to something non-empty.
+function writeSignatureFixtures(fixture) {
+  writeFileSync(join(fixture, "PickScribe_9.9.9_amd64.AppImage.sig"), Buffer.from("fake-sig-amd64").toString("base64"));
+  writeFileSync(join(fixture, "PickScribe_9.9.9_aarch64.app.tar.gz.sig"), Buffer.from("fake-sig-aarch64").toString("base64"));
 }
 
 function writeMacBundleFixture(fixture, marker) {
@@ -124,6 +139,12 @@ case "$url" in
   *.AppImage|*.app.tar.gz)
     cp "$PICKSCRIBE_TEST_FIXTURE/\${url##*/}" "$out"
     ;;
+  *.sig)
+    if [ ! -f "$PICKSCRIBE_TEST_FIXTURE/\${url##*/}" ]; then
+      exit 22
+    fi
+    cp "$PICKSCRIBE_TEST_FIXTURE/\${url##*/}" "$out"
+    ;;
   *)
     echo "unexpected url: $url" >&2
     exit 64
@@ -133,23 +154,45 @@ esac
   );
 }
 
-function runInstaller(root, fixture, extraEnv = {}) {
-  const fakebin = join(root, "fakebin");
-  mkdirSync(fakebin, { recursive: true });
-  writeFakeCurl(fakebin);
-  writeFakeUname(fakebin);
-  writeFakeSysctl(fakebin);
+// Writes a fake `minisign` (or `rsign`) that records the arguments it was
+// called with and exits with `exitCode`, standing in for real signature
+// verification so tests can force the pass/fail outcome deterministically.
+function writeFakeVerifier(fakebin, { name, exitCode, callLog }) {
+  writeExecutable(
+    join(fakebin, name),
+    `#!/bin/sh
+printf '%s\\n' "$*" >> "${callLog}"
+exit ${exitCode}
+`,
+  );
+}
 
-  const env = {
+function baseEnv(root, fixture, extraEnv) {
+  return {
     ...process.env,
     HOME: join(root, "home"),
     XDG_DATA_HOME: join(root, "home", ".local", "share"),
-    PATH: `${fakebin}:${process.env.PATH}`,
     PICKSCRIBE_TEST_FIXTURE: fixture,
     PICKSCRIBE_RELEASE_API_URL: "https://release.test/latest",
     PICKSCRIBE_TEST_OS: "Linux",
     PICKSCRIBE_TEST_ARCH: "x86_64",
     ...extraEnv,
+  };
+}
+
+function runInstaller(root, fixture, extraEnv = {}, { verifier } = {}) {
+  const fakebin = join(root, "fakebin");
+  mkdirSync(fakebin, { recursive: true });
+  writeFakeCurl(fakebin);
+  writeFakeUname(fakebin);
+  writeFakeSysctl(fakebin);
+  if (verifier) {
+    writeFakeVerifier(fakebin, verifier);
+  }
+
+  const env = {
+    ...baseEnv(root, fixture, extraEnv),
+    PATH: `${fakebin}:${STANDARD_PATH}`,
   };
 
   return execFileSync("sh", [installer], {
@@ -160,23 +203,19 @@ function runInstaller(root, fixture, extraEnv = {}) {
   });
 }
 
-function runInstallerFailure(root, fixture, extraEnv = {}) {
+function runInstallerFailure(root, fixture, extraEnv = {}, { verifier } = {}) {
   const fakebin = join(root, "fakebin");
   mkdirSync(fakebin, { recursive: true });
   writeFakeCurl(fakebin);
   writeFakeUname(fakebin);
   writeFakeSysctl(fakebin);
+  if (verifier) {
+    writeFakeVerifier(fakebin, verifier);
+  }
 
   const env = {
-    ...process.env,
-    HOME: join(root, "home"),
-    XDG_DATA_HOME: join(root, "home", ".local", "share"),
-    PATH: `${fakebin}:${process.env.PATH}`,
-    PICKSCRIBE_TEST_FIXTURE: fixture,
-    PICKSCRIBE_RELEASE_API_URL: "https://release.test/latest",
-    PICKSCRIBE_TEST_OS: "Linux",
-    PICKSCRIBE_TEST_ARCH: "x86_64",
-    ...extraEnv,
+    ...baseEnv(root, fixture, extraEnv),
+    PATH: `${fakebin}:${STANDARD_PATH}`,
   };
 
   return spawnSync("sh", [installer], {
@@ -324,4 +363,53 @@ test("AppImage install refuses to overwrite an unrelated command", (root) => {
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /command path already exists and was not created by PickScribe/);
+});
+
+test("verifier present + good signature installs and reports verification", (root) => {
+  const fixture = writeFixture(root);
+  const callLog = join(root, "minisign-calls.log");
+
+  const output = runInstaller(root, fixture, {}, { verifier: { name: "minisign", exitCode: 0, callLog } });
+
+  assert.match(output, /PickScribe_9\.9\.9_amd64\.AppImage signature verified \(minisign\)\./);
+  assert.equal(existsSync(join(root, "home", ".local", "bin", "PickScribe.AppImage")), true);
+  const calls = readFileSync(callLog, "utf8");
+  assert.match(calls, /-P RWSh3tOmmtL9yYOe9M6YhBqmVJx3TibwJaHXYq4YbYKONVfjlBdKqRk6/);
+});
+
+test("verifier present + bad signature aborts before install", (root) => {
+  const fixture = writeFixture(root);
+  const callLog = join(root, "minisign-calls.log");
+
+  const result = runInstallerFailure(root, fixture, {}, { verifier: { name: "minisign", exitCode: 1, callLog } });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /signature verification failed for PickScribe_9\.9\.9_amd64\.AppImage; aborting install/);
+  assert.equal(existsSync(join(root, "home", ".local", "bin", "PickScribe.AppImage")), false);
+});
+
+test("verifier present + missing .sig aborts before install", (root) => {
+  const fixture = writeFixture(root);
+  rmSync(join(fixture, "PickScribe_9.9.9_amd64.AppImage.sig"));
+  const callLog = join(root, "minisign-calls.log");
+
+  const result = runInstallerFailure(root, fixture, {}, { verifier: { name: "minisign", exitCode: 0, callLog } });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /failed to download the signature for PickScribe_9\.9\.9_amd64\.AppImage/);
+  assert.match(result.stderr, /verification is mandatory/);
+  assert.equal(existsSync(join(root, "home", ".local", "bin", "PickScribe.AppImage")), false);
+  assert.equal(existsSync(callLog), false);
+});
+
+test("no verifier on PATH warns loudly and proceeds with install", (root) => {
+  const fixture = writeFixture(root);
+
+  const result = runInstallerFailure(root, fixture);
+
+  assert.equal(result.status, 0);
+  assert.match(result.stderr, /WARNING: signature verification skipped for PickScribe_9\.9\.9_amd64\.AppImage/);
+  assert.match(result.stderr, /brew install minisign/);
+  assert.match(result.stderr, /apt install minisign/);
+  assert.equal(existsSync(join(root, "home", ".local", "bin", "PickScribe.AppImage")), true);
 });
