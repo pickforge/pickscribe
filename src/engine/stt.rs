@@ -43,17 +43,8 @@ pub fn detect_model_path() -> Option<PathBuf> {
     }
     let home = std::env::var("HOME").ok()?;
     let model_dir = PathBuf::from(&home).join(".local/share/whisper.cpp/models");
-    for name in [
-        "ggml-large-v3-turbo.bin",
-        "ggml-large-v3-turbo-q5_0.bin",
-        "ggml-small.bin",
-        "ggml-base.bin",
-        "ggml-tiny.bin",
-    ] {
-        let candidate = model_dir.join(name);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
+    if let Some(path) = detect_model_in_dir(&model_dir) {
+        return Some(path);
     }
     // Arch whisper.cpp-model-* packages
     if let Ok(entries) = fs::read_dir("/usr/share") {
@@ -73,6 +64,39 @@ pub fn detect_model_path() -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn detect_model_in_dir(model_dir: &Path) -> Option<PathBuf> {
+    for name in [
+        "ggml-large-v3-turbo.bin",
+        "ggml-large-v3-turbo-q5_0.bin",
+        "ggml-small.bin",
+        "ggml-small.en.bin",
+        "ggml-base.bin",
+        "ggml-base.en.bin",
+        "ggml-tiny.bin",
+        "ggml-tiny.en.bin",
+    ] {
+        let candidate = model_dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    let mut models = fs::read_dir(model_dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("ggml-"))
+                && path.extension().is_some_and(|extension| extension == "bin")
+        })
+        .collect::<Vec<_>>();
+    models.sort();
+    models.into_iter().next()
 }
 
 /// List models available in the default model directory (for the settings UI).
@@ -302,6 +326,43 @@ fn parse_progress_percentage(line: &str) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_english_model_from_preference_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = dir.path().join("ggml-base.en.bin");
+        fs::write(&model, []).unwrap();
+
+        assert_eq!(detect_model_in_dir(dir.path()), Some(model));
+    }
+
+    #[test]
+    fn detects_unknown_model_by_sorted_filename() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("ggml-foo.bin");
+        fs::write(dir.path().join("ggml-zeta.bin"), []).unwrap();
+        fs::write(&first, []).unwrap();
+
+        assert_eq!(detect_model_in_dir(dir.path()), Some(first));
+    }
+
+    #[test]
+    fn returns_none_for_empty_model_directory() {
+        let dir = tempfile::tempdir().unwrap();
+
+        assert_eq!(detect_model_in_dir(dir.path()), None);
+    }
+
+    #[test]
+    fn respects_model_preference_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let preferred = dir.path().join("ggml-small.bin");
+        fs::write(dir.path().join("ggml-base.bin"), []).unwrap();
+        fs::write(dir.path().join("ggml-small.en.bin"), []).unwrap();
+        fs::write(&preferred, []).unwrap();
+
+        assert_eq!(detect_model_in_dir(dir.path()), Some(preferred));
+    }
 
     #[test]
     fn parses_whisper_progress_percentages() {

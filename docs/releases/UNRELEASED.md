@@ -21,6 +21,8 @@ then reset this file.
   preserves completed segments and only re-transcribes the unfinished tail.
 - PickScribe now finds `whisper-cli` in `~/.local/bin` when desktop sessions omit
   that directory from `PATH`.
+- Whisper model auto-detection now recognizes English-only `.en` models and
+  other `ggml-*.bin` variants in the standard local model directory.
 - Double-clicking empty titlebar space now maximizes or restores the window.
 - On Linux, the float capsule now keeps its glow visible without capturing
   clicks in the transparent margin. Other platforms keep a snug window to
@@ -101,6 +103,9 @@ then reset this file.
 
 ### Tested
 
+- Whisper model auto-detection fix: `cargo test` and `cargo clippy --workspace
+  --all-targets -- -D warnings`. Live-verified the installed
+  `~/.local/share/whisper.cpp/models/ggml-base.en.bin` model is selected.
 - pickscribe#66 PR 2 (macOS audio capture via ffmpeg/avfoundation): `cargo
   test` (workspace root, 122 tests including new `recorder_args` and
   `platform` coverage), `cargo test --manifest-path src-tauri/Cargo.toml` (37
