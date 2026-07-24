@@ -11,6 +11,11 @@ BIN_NAME="pickscribe-app"
 APP_ID="pickscribe-app"
 WM_CLASS="Pickscribe-app"
 
+# Tauri updater signing key (src-tauri/tauri.conf.json -> plugins.updater.pubkey,
+# base64-decoded to its minisign public-key line). Embedded so the installer
+# never fetches the trust root over the network. Key id: C9FDD29AA6D3DEA1.
+readonly MINISIGN_PUBKEY="RWSh3tOmmtL9yYOe9M6YhBqmVJx3TibwJaHXYq4YbYKONVfjlBdKqRk6"
+
 # Environment overrides:
 #   PICKSCRIBE_INSTALL_DIR  Wrapper/AppImage directory. Default: $HOME/.local/bin.
 #   PICKSCRIBE_VERSION      Install a specific release tag, such as v0.1.0.
@@ -246,6 +251,79 @@ download_asset() {
 
   download_to "$asset_url" "$asset_path" || die "failed to download $asset_name"
   [ -s "$asset_path" ] || die "downloaded asset is empty: $asset_name"
+}
+
+select_signature_verifier() {
+  if command -v minisign >/dev/null 2>&1; then
+    verifier_cmd="minisign"
+  elif command -v rsign >/dev/null 2>&1; then
+    verifier_cmd="rsign"
+  else
+    verifier_cmd=""
+  fi
+}
+
+warn_signature_verification_skipped() {
+  printf '\n' >&2
+  printf '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n' >&2
+  printf '!! WARNING: signature verification skipped for %s\n' "$asset_name" >&2
+  printf '!!\n' >&2
+  printf '!! No minisign-compatible verifier (minisign or rsign) was found on\n' >&2
+  printf '!! PATH, so the downloaded release asset could not be authenticated\n' >&2
+  printf '!! before install. Install a verifier and re-run to enable this check:\n' >&2
+  printf '!!   macOS:  brew install minisign\n' >&2
+  printf '!!   Linux:  apt install minisign  (or your distro equivalent)\n' >&2
+  printf '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n' >&2
+  printf '\n' >&2
+}
+
+# BSD base64 (older macOS) only accepts `-D` for decode; GNU base64 (Linux)
+# and modern macOS accept `-d`. Try `-d` first, then fall back to `-D`, so
+# decoding works across both without misdetecting the platform.
+decode_base64_to() {
+  decode_src=$1
+  decode_dest=$2
+
+  base64 -d < "$decode_src" > "$decode_dest" 2>/dev/null ||
+    base64 -D < "$decode_src" > "$decode_dest" 2>/dev/null
+}
+
+# Verifies the downloaded asset against its `<asset>.sig` companion (a
+# base64-wrapped minisign signature, as published by the Tauri updater
+# bundler) before the archive is parsed or installed. If a compatible
+# verifier is on PATH, verification is mandatory and fails closed: a missing,
+# undecodable, or invalid signature aborts the install. If no verifier is
+# available, this prints a loud warning and lets the install proceed.
+verify_asset_signature() {
+  select_signature_verifier
+  if [ -z "$verifier_cmd" ]; then
+    warn_signature_verification_skipped
+    return 0
+  fi
+
+  sig_encoded_path="$asset_path.sig.b64"
+  sig_path="$asset_path.minisig"
+
+  download_to "$asset_url.sig" "$sig_encoded_path" ||
+    die "failed to download the signature for $asset_name; refusing to install an unverified asset (found $verifier_cmd on PATH, so verification is mandatory)"
+  [ -s "$sig_encoded_path" ] || die "downloaded signature for $asset_name is empty"
+
+  decode_base64_to "$sig_encoded_path" "$sig_path" ||
+    die "failed to decode the signature for $asset_name"
+  [ -s "$sig_path" ] || die "decoded signature for $asset_name is empty"
+
+  case "$verifier_cmd" in
+    minisign)
+      minisign -V -q -m "$asset_path" -x "$sig_path" -P "$MINISIGN_PUBKEY" ||
+        die "signature verification failed for $asset_name; aborting install"
+      ;;
+    rsign)
+      rsign verify "$asset_path" -P "$MINISIGN_PUBKEY" -x "$sig_path" -q ||
+        die "signature verification failed for $asset_name; aborting install"
+      ;;
+  esac
+
+  printf '%s signature verified (%s).\n' "$asset_name" "$verifier_cmd"
 }
 
 desktop_escape() {
@@ -559,6 +637,7 @@ main() {
   trap 'exit 130' INT
   trap 'exit 143' TERM
   download_asset
+  verify_asset_signature
   if [ "$platform" = "macos" ]; then
     install_macos_app
   else
