@@ -4,7 +4,7 @@
 
 # PickScribe
 
-Local Linux dictation with AI cleanup. PickScribe records your microphone, transcribes speech locally with `whisper.cpp`, cleans the transcript with an OpenAI-compatible LLM provider, and pastes the final text into the focused app — one hotkey to start, the same hotkey to stop.
+Local Linux and macOS dictation with AI cleanup. PickScribe records your microphone, transcribes speech locally with `whisper.cpp`, cleans the transcript with an OpenAI-compatible LLM provider, and pastes the final text into the focused app — one hotkey to start, the same hotkey to stop.
 
 ```text
 Shortcut
@@ -18,7 +18,7 @@ Local-first. Open source. Built for people who ship.
 
 PickForge builds the app. PickScribe lets you dictate into it — or any other app — instead of typing.
 
-> **Status:** Linux ships first: CachyOS/Arch + KDE/Wayland are the primary target, with `.deb` and AppImage bundles. macOS and Windows remain blocked until native audio capture, paste automation, global shortcuts, tray/window validation, signing, and native-host smoke tests land.
+> **Status:** PickScribe ships for Linux (`.deb` and AppImage) and Apple silicon macOS (`.app.tar.gz`, unsigned). Windows remains blocked pending native platform support.
 
 ## The desktop app
 
@@ -67,7 +67,8 @@ On Wayland the app runs natively (smooth WebKitGTK scrolling). On Wayland compos
 | --- | --- | --- |
 | Linux/KDE, Wayland or its `PICKSCRIBE_X11=1` XWayland fallback | App-managed KWin `skipswitcher`/`skiptaskbar`/`skippager` window rule, alongside Tauri's `skip_taskbar` | Supported |
 | Other Linux desktops/window managers | Tauri's standards-based `skip_taskbar` (X11 `_NET_WM_STATE_SKIP_TASKBAR`/`SKIP_PAGER`) only, no app-managed desktop config | Partial — Alt+Tab-equivalent exclusion is desktop-specific and untested outside KDE |
-| Windows/macOS | Not applicable yet | PickScribe ships Linux only for now (see Status above) |
+| macOS | Tauri's native app-window behavior | Supported |
+| Windows | Not applicable yet | PickScribe does not ship for Windows yet |
 
 ### Crash reports
 
@@ -85,15 +86,17 @@ Production builds send anonymous crash and error reports by default so Pickforge
 
 ## Install
 
-**Quick install** (Linux AppImage with FUSE fallback, no sudo):
+**Quick install** (Linux or Apple silicon macOS, no sudo):
 
 ```sh
 curl -fsSL https://pickforge.dev/pickscribe/install.sh | sh
 ```
 
-Installs the latest [release](https://github.com/pickforge/pickscribe/releases) AppImage into your home, adds an app-menu launcher, and falls back automatically on FUSE3-only systems. The dictation engine (whisper.cpp, ydotool paste automation) is set up by building from source below.
+On Linux, this installs the latest [release](https://github.com/pickforge/pickscribe/releases) AppImage into your home, adds an app-menu launcher, and falls back automatically on FUSE3-only systems. On macOS, it installs `PickScribe.app` into `~/Applications` and writes `pickscribe-app` into `${PICKSCRIBE_INSTALL_DIR:-$HOME/.local/bin}`. The dictation engine dependencies are set up by building from source below.
 
-Download the latest `.deb` or `.AppImage` from [Releases](https://github.com/pickforge/pickscribe/releases/latest). PickScribe ships Linux only for now: install the `.deb` with your package manager, or `chmod +x` the `.AppImage` and run it. Updates arrive through the in-app updater.
+macOS builds are not Apple-signed or notarized because Pickforge has no Apple Developer ID. The install script avoids Gatekeeper quarantine. For a `.app.tar.gz` downloaded manually in a browser, right-click the app and choose Open, or run `xattr -dr com.apple.quarantine ~/Applications/PickScribe.app`.
+
+Download the latest `.deb`, `.AppImage`, or Apple silicon `.app.tar.gz` from [Releases](https://github.com/pickforge/pickscribe/releases/latest). Install the `.deb` with your package manager, `chmod +x` the `.AppImage` and run it, or extract the macOS app into `~/Applications`. Updates arrive through the in-app updater.
 
 ### From source
 

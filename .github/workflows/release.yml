@@ -17,7 +17,7 @@ defaults:
     shell: bash
 
 jobs:
-  build:
+  build-linux:
     name: Build Linux bundles
     # Older LTS keeps the AppImage glibc baseline broad.
     runs-on: ubuntu-22.04
@@ -117,28 +117,115 @@ jobs:
             echo "::warning::Sentry upload failed; continuing release"
           fi
 
-      - name: Collect release assets
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
+      - name: Collect Linux release assets
         run: |
           bun run pickforge-tauri-release collect-assets
-
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            bun run pickforge-tauri-release generate-latest-json \
-              --assets-dir release-assets \
-              --version "${RELEASE_TAG#v}" \
-              --download-base-url "https://github.com/pickforge/pickscribe/releases/download/${RELEASE_TAG}" \
-              --out release-assets/latest.json
-            bun run pickforge-tauri-release verify-latest-json --input release-assets/latest.json
-          fi
-
           ls -la release-assets
 
-      - name: Upload workflow artifacts
+      - name: Upload Linux workflow artifacts
         uses: actions/upload-artifact@v7
         with:
           name: pickscribe-linux-${{ github.run_number }}
           path: release-assets/
+
+  build-macos:
+    name: Build macOS Apple silicon bundle
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Verify tag matches app version
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          conf_version="$(jq -r '.version' src-tauri/tauri.conf.json)"
+          tag_version="${RELEASE_TAG#v}"
+          if [[ "$tag_version" != "$conf_version" ]]; then
+            echo "ERROR: tag $RELEASE_TAG (version $tag_version) does not match"
+            echo "src-tauri/tauri.conf.json version $conf_version."
+            exit 1
+          fi
+          echo "Tag version $tag_version matches tauri.conf.json."
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.12
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Validate release config
+        run: bun run pickforge-tauri-release validate-config
+
+      - name: Build Tauri app bundle
+        env:
+          # Tauri updater minisign key, not Apple code signing.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bun run tauri build --bundles app
+
+      - name: Version macOS updater artifact
+        run: |
+          version="$(jq -r '.version' src-tauri/tauri.conf.json)"
+          source_archive="target/release/bundle/macos/PickScribe.app.tar.gz"
+          source_signature="${source_archive}.sig"
+          target_archive="target/release/bundle/macos/PickScribe_${version}_aarch64.app.tar.gz"
+          [[ -f "$source_archive" ]] || { echo "ERROR: missing $source_archive"; exit 1; }
+          [[ -f "$source_signature" ]] || { echo "ERROR: missing $source_signature"; exit 1; }
+          mv "$source_archive" "$target_archive"
+          mv "$source_signature" "${target_archive}.sig"
+
+      - name: Collect macOS release assets
+        run: |
+          bun run pickforge-tauri-release collect-assets
+          ls -la release-assets
+
+      - name: Upload macOS workflow artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: pickscribe-macos-${{ github.run_number }}
+          path: release-assets/
+
+  release:
+    name: Create draft release
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.12
+
+      - name: Install release tooling
+        run: bun install --frozen-lockfile
+
+      - name: Download release assets
+        uses: actions/download-artifact@v8
+        with:
+          pattern: pickscribe-*-${{ github.run_number }}
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate combined updater manifest
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          bun run pickforge-tauri-release generate-latest-json \
+            --assets-dir release-assets \
+            --version "${RELEASE_TAG#v}" \
+            --download-base-url "https://github.com/pickforge/pickscribe/releases/download/${RELEASE_TAG}" \
+            --out release-assets/latest.json
+          bun run pickforge-tauri-release verify-latest-json --input release-assets/latest.json
+          ls -la release-assets
 
       - name: Create draft GitHub release
         if: startsWith(github.ref, 'refs/tags/')
@@ -149,11 +236,11 @@ jobs:
           release_notes="$(cat <<'EOF'
           ## Platform support
 
-          PickScribe is Linux-first (PipeWire + whisper.cpp + ydotool). The
-          bundles below are built on Ubuntu; Arch/CachyOS users can also build
-          from source with `bun run tauri build`. Native-host smoke checks are
-          not automated yet. macOS and Windows remain blocked until their native
-          audio, paste, shortcut, tray/window, signing, and smoke-test work lands.
+          PickScribe ships Linux bundles built on Ubuntu and an unsigned Apple
+          silicon macOS app. Install either platform with the curl installer;
+          Arch/CachyOS users can also build from source. The macOS app is not
+          Apple-signed or notarized because Pickforge has no Developer ID.
+          Windows remains blocked pending native platform support.
           EOF
           )"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then

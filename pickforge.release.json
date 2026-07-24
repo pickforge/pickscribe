@@ -11,6 +11,8 @@
       "*.AppImage.sig",
       "*.AppImage.tar.gz",
       "*.AppImage.tar.gz.sig",
+      "*.app.tar.gz",
+      "*.app.tar.gz.sig",
       "*.deb",
       "*.deb.sig"
     ]
@@ -20,6 +22,6 @@
     "latestJsonAsset": "latest.json"
   },
   "updater": {
-    "requiredPlatforms": ["linux-x86_64"]
+    "requiredPlatforms": ["linux-x86_64", "darwin-aarch64"]
   }
 }
