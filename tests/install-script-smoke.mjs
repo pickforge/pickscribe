@@ -159,6 +159,7 @@ test("AppImage install writes a FUSE-aware wrapper, desktop entry, and icon", (r
   assert.match(readFileSync(command, "utf8"), new RegExp(appImage.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(readFileSync(launcher, "utf8"), /Exec=".*\/\.local\/bin\/pickscribe-app"/);
   assert.match(readFileSync(launcher, "utf8"), /Icon=pickscribe-app/);
+  assert.match(readFileSync(launcher, "utf8"), /^StartupWMClass=Pickscribe-app$/m);
   assert.equal(existsSync(icon), true);
   assert.match(output, /Launch with `pickscribe-app`/);
 });

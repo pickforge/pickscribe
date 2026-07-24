@@ -27,7 +27,7 @@ Icon=pickscribe-app
 Terminal=false
 Categories=Utility;Audio;
 Keywords=dictation;speech;voice;whisper;
-StartupWMClass=pickscribe-app
+StartupWMClass=Pickscribe-app
 EOF
 
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$APPS_DIR" || true

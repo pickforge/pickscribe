@@ -23,9 +23,10 @@ use pickscribe::engine::find_command;
 
 const RULE_GROUP: &str = "pickscribe-float-keep-above";
 const FLOAT_TITLE: &str = "PickScribe Float";
-const WM_CLASS: &str = "pickscribe";
+// KWin wmclass matching is case-sensitive; GTK derives this runtime class from the binary name (hardware-verified on KDE Wayland).
+const WM_CLASS: &str = "Pickscribe-app";
 
-fn group_has_key(contents: &str, group: &str, key: &str) -> bool {
+fn group_value<'a>(contents: &'a str, group: &str, key: &str) -> Option<&'a str> {
     let header = format!("[{group}]");
     let mut in_group = false;
     for line in contents.lines() {
@@ -34,11 +35,25 @@ fn group_has_key(contents: &str, group: &str, key: &str) -> bool {
             in_group = trimmed == header;
             continue;
         }
-        if in_group && trimmed.starts_with(key) {
-            return true;
+        if in_group {
+            match trimmed.split_once('=') {
+                Some((candidate, value)) if candidate.trim() == key => {
+                    return Some(value.trim());
+                }
+                _ => {}
+            }
         }
     }
-    false
+    None
+}
+
+fn group_has_key(contents: &str, group: &str, key: &str) -> bool {
+    group_value(contents, group, key).is_some()
+}
+
+fn rule_is_current(contents: &str) -> bool {
+    group_has_key(contents, RULE_GROUP, "positionrule")
+        && group_value(contents, RULE_GROUP, "wmclass") == Some(WM_CLASS)
 }
 
 /// Whether the current session is a KDE Wayland compositor session — native
@@ -73,8 +88,7 @@ pub fn ensure_float_rule() {
     let rules_path = Path::new(&home).join(".config/kwinrulesrc");
     let existing_rules = std::fs::read_to_string(&rules_path).unwrap_or_default();
     let already_registered = existing_rules.contains(RULE_GROUP);
-    // "positionrule" inside our group marks the current revision; rewrite older ones.
-    if already_registered && group_has_key(&existing_rules, RULE_GROUP, "positionrule") {
+    if already_registered && rule_is_current(&existing_rules) {
         return;
     }
 
@@ -105,7 +119,7 @@ pub fn ensure_float_rule() {
     };
 
     write("Description", "PickScribe float capsule (managed by PickScribe)");
-    // Match: window class contains "pickscribe" AND title is exactly the
+    // Match: window class contains "Pickscribe-app" AND title is exactly the
     // float window title, so the main window is unaffected.
     write("wmclass", WM_CLASS);
     write("wmclassmatch", "2"); // substring
@@ -174,6 +188,11 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rule_uses_the_runtime_window_class() {
+        assert_eq!(WM_CLASS, "Pickscribe-app");
+    }
+
+    #[test]
     fn native_wayland_kde_session_installs_the_rule() {
         // Also covers pickforge/pickscribe#46: the predicate takes no
         // GDK_BACKEND input at all, so a KDE Wayland session running the
@@ -226,12 +245,11 @@ mod tests {
     }
 
     #[test]
-    fn group_has_key_finds_a_key_in_the_current_revision() {
-        let contents = "[pickscribe-float-keep-above]\nskiptaskbar=true\npositionrule=3\n";
-        assert!(group_has_key(
-            contents,
-            "pickscribe-float-keep-above",
-            "positionrule"
-        ));
+    fn current_rule_requires_the_exact_runtime_window_class() {
+        let current = "[pickscribe-float-keep-above]\nwmclass=Pickscribe-app\npositionrule=3\n";
+        let stale = "[pickscribe-float-keep-above]\nwmclass=pickscribe\npositionrule=3\n";
+
+        assert!(rule_is_current(current));
+        assert!(!rule_is_current(stale));
     }
 }
