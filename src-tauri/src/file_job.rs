@@ -301,9 +301,13 @@ mod tests {
     use super::*;
 
     fn temp_dir() -> Result<PathBuf> {
+        // A timestamp alone can collide when parallel test threads hit the
+        // same clock tick; the atomic counter makes each dir unique.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let stamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        let unique = NEXT.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
-            "pickscribe-file-job-{}-{stamp}",
+            "pickscribe-file-job-{}-{stamp}-{unique}",
             std::process::id()
         ));
         fs::create_dir(&dir)?;
