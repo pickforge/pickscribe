@@ -1,3 +1,5 @@
+import type { HostPlatform } from "./platform";
+
 export type SettingsSaveDisplayState = {
   headerSaveHidden: boolean;
   headerSaveDisabled: boolean;
@@ -14,5 +16,12 @@ export function settingsSaveDisplayState(dirty: boolean): SettingsSaveDisplaySta
     headerSaveHidden: dirty,
     headerSaveDisabled: !dirty,
     overlayVisible: dirty,
+  };
+}
+
+export function settingsPlatformDisplayState(platform: HostPlatform) {
+  return {
+    shortcutFieldVisible: platform === "macos",
+    desktopKeybindingHelpVisible: platform === "linux",
   };
 }

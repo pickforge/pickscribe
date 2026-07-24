@@ -6,6 +6,9 @@ then reset this file.
 
 ## User-facing changes
 
+- On macOS, PickScribe can now start and stop dictation with a configurable
+  in-app global shortcut (Cmd+Shift+Space by default). Linux continues to use
+  the existing desktop-environment keybinding path.
 - Transcribe audio or video files by dropping them onto the app or browsing
   from the dashboard. PickScribe runs local whisper.cpp transcription with
   progress and cancellation, stores results in History, and exports TXT, SRT,
@@ -127,6 +130,12 @@ then reset this file.
   machine — both are covered instead by unit tests against the
   `DeliveryRuntime` seam and the pure script-building/error-mapping
   functions.
+- Issue #66 PR 4 (macOS in-app dictation shortcut): `cargo test` (119 tests),
+  `cargo test --manifest-path src-tauri/Cargo.toml` (38 tests), `cargo clippy
+  --workspace --all-targets -- -D warnings`, `bun install --frozen-lockfile`,
+  `bun run check`, `bunx vitest run` (42 tests), and `bun run build` on macOS.
+  Live global-shortcut registration was intentionally skipped to avoid changing
+  the active desktop session.
 - Issue #59 (macOS compile support and CI): `cargo check --manifest-path
   src-tauri/Cargo.toml`, `cargo test --manifest-path src-tauri/Cargo.toml` (37
   tests), `bun install --frozen-lockfile && bun run check`, `bun run lint`, and

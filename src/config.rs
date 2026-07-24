@@ -152,6 +152,24 @@ impl Default for PasteConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ShortcutConfig {
+    pub toggle: String,
+}
+
+impl Default for ShortcutConfig {
+    fn default() -> Self {
+        Self {
+            toggle: if cfg!(target_os = "macos") {
+                "Cmd+Shift+Space".into()
+            } else {
+                String::new()
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
@@ -160,6 +178,7 @@ pub struct AppConfig {
     pub incremental: IncrementalConfig,
     pub cleanup: CleanupConfig,
     pub paste: PasteConfig,
+    pub shortcut: ShortcutConfig,
 }
 
 pub fn config_dir() -> PathBuf {
@@ -373,6 +392,32 @@ mod tests {
                 .as_deref(),
             Some("config-key")
         );
+    }
+
+    #[test]
+    fn shortcut_config_uses_platform_default() {
+        let cfg = AppConfig::default();
+        let expected = if cfg!(target_os = "macos") {
+            "Cmd+Shift+Space"
+        } else {
+            ""
+        };
+
+        assert_eq!(cfg.shortcut.toggle, expected);
+    }
+
+    #[test]
+    fn shortcut_config_deserializes_partial_toml() {
+        let cfg: AppConfig = toml::from_str(
+            r#"
+            [shortcut]
+            toggle = "Cmd+Option+D"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(cfg.shortcut.toggle, "Cmd+Option+D");
+        assert_eq!(cfg.general.theme, "system");
     }
 
     #[test]

@@ -4,6 +4,7 @@ mod kwin;
 mod lifecycle;
 mod macos;
 mod settings;
+mod shortcut;
 mod tray;
 
 use std::fs;
@@ -251,7 +252,23 @@ fn get_platform_support() -> PlatformSupport {
 
 #[tauri::command]
 fn update_app_config(app: AppHandle, config: AppConfig) -> CommandResult<AppConfig> {
-    settings::replace(&app, config)
+    let previous = AppConfig::load();
+    let next_shortcut = config.shortcut.toggle.clone();
+    shortcut::replace(&app, &previous.shortcut.toggle, &next_shortcut)?;
+
+    match settings::replace(&app, config) {
+        Ok(config) => Ok(config),
+        Err(err) => {
+            if let Err(rollback_err) =
+                shortcut::replace(&app, &next_shortcut, &previous.shortcut.toggle)
+            {
+                return Err(format!(
+                    "{err}; additionally failed to restore the previous global shortcut: {rollback_err}"
+                ));
+            }
+            Err(err)
+        }
+    }
 }
 
 #[tauri::command]
@@ -865,7 +882,7 @@ pub fn run() {
     };
     let engine = Arc::new(Engine::new().expect("failed to open PickScribe data directory"));
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .manage(engine)
         .plugin(sentry_plugin)
         .plugin(tauri_plugin_opener::init())
@@ -884,7 +901,24 @@ pub fn run() {
             } else {
                 focus_main_window(app);
             }
-        }))
+        }));
+    let builder = if cfg!(target_os = "macos") {
+        builder.plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        let engine = engine::engine(app);
+                        engine.set_chord_override(None);
+                        engine.toggle(app);
+                    }
+                })
+                .build(),
+        )
+    } else {
+        builder
+    };
+
+    builder
         .invoke_handler(tauri::generate_handler![
             get_state,
             toggle_dictation,
@@ -912,6 +946,9 @@ pub fn run() {
             tray::setup(app)?;
             let cfg = AppConfig::load();
             ensure_float_window(app.handle(), cfg.general.float_button);
+            if let Err(err) = shortcut::register_startup(app.handle(), &cfg.shortcut.toggle) {
+                eprintln!("{err}");
+            }
             #[cfg(target_os = "linux")]
             if let Some(window) = app.get_webview_window("main") {
                 fix_csd_titlebar_input(&window);

@@ -66,10 +66,6 @@ fn support_for(os: &str) -> PlatformSupport {
             "macOS release is blocked until the native host path is implemented and signed.",
             [
                 (
-                    "Global shortcuts",
-                    "Native shortcut registration and permission flow are missing.",
-                ),
-                (
                     "Tray/window behavior validation",
                     "Menu bar, dock, main window, and floating window behavior are not validated.",
                 ),
@@ -171,7 +167,7 @@ mod tests {
         assert!(!support.dictation_supported);
         assert!(!blocker_names.contains(&"Native audio capture"));
         assert!(!blocker_names.contains(&"Paste automation"));
-        assert!(blocker_names.contains(&"Global shortcuts"));
+        assert!(!blocker_names.contains(&"Global shortcuts"));
         assert!(blocker_names.contains(&"Tray/window behavior validation"));
         assert!(blocker_names.contains(&"Signing/notarization"));
         assert!(blocker_names.contains(&"Native-host smoke tests"));

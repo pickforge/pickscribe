@@ -13,8 +13,9 @@
     type AppConfig,
     type DoctorCheck,
   } from "../api";
+  import { hostPlatform } from "../platform";
   import { reconcileExternalSettings, shouldApplySaveResponse } from "../settingsMerge";
-  import { settingsSaveDisplayState } from "../settingsDisplay";
+  import { settingsPlatformDisplayState, settingsSaveDisplayState } from "../settingsDisplay";
   import { setTheme, type ThemeSetting } from "../theme";
 
   let {
@@ -48,6 +49,7 @@
     config !== null && savedJson !== "" && JSON.stringify($state.snapshot(config)) !== savedJson
   );
   const saveDisplay = $derived(settingsSaveDisplayState(dirty));
+  const platformDisplay = settingsPlatformDisplayState(hostPlatform());
 
   $effect(() => {
     onDirtyChange(dirty);
@@ -650,17 +652,34 @@
       that scroller instead of the app viewport. See issue #45.
     -->
 
-    <div class="panel card hotkey-panel">
-      <h3>Global hotkey</h3>
-      <p class="hint">
-        Bind a key in KDE System Settings → Shortcuts → Custom Shortcuts to:
-      </p>
-      <code class="hotkey-code">pickscribe-app --toggle</code>
-      <p class="hint">
-        Press once to start recording, again to stop. A remapped Caps Lock (to F13) makes a great
-        dedicated dictation key. The CLI <code>pickscribe</code> binary keeps working too.
-      </p>
-    </div>
+    {#if platformDisplay.shortcutFieldVisible}
+      <div class="panel card hotkey-panel">
+        <h3>Global shortcut</h3>
+        <div class="field">
+          <label for="shortcut-toggle">Toggle dictation</label>
+          <input
+            id="shortcut-toggle"
+            class="input"
+            type="text"
+            placeholder="Cmd+Shift+Space"
+            bind:value={config.shortcut.toggle}
+          />
+          <span class="hint">Use a shortcut such as Cmd+Shift+Space. Leave empty to turn it off.</span>
+        </div>
+      </div>
+    {:else if platformDisplay.desktopKeybindingHelpVisible}
+      <div class="panel card hotkey-panel">
+        <h3>Global hotkey</h3>
+        <p class="hint">
+          Bind a key in KDE System Settings → Shortcuts → Custom Shortcuts to:
+        </p>
+        <code class="hotkey-code">pickscribe-app --toggle</code>
+        <p class="hint">
+          Press once to start recording, again to stop. A remapped Caps Lock (to F13) makes a great
+          dedicated dictation key. The CLI <code>pickscribe</code> binary keeps working too.
+        </p>
+      </div>
+    {/if}
   {/if}
 </section>
 
