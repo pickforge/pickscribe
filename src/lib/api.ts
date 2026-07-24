@@ -120,6 +120,9 @@ export interface AppConfig {
     delay_ms: number;
     copy_to_clipboard: boolean;
   };
+  shortcut: {
+    toggle: string;
+  };
 }
 
 export type ReleaseStatus = "ships_now" | "blocked";

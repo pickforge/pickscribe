@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { settingsSaveDisplayState } from "./settingsDisplay";
+import { settingsPlatformDisplayState, settingsSaveDisplayState } from "./settingsDisplay";
 
 describe("settingsSaveDisplayState", () => {
   it("shows a visible, disabled header Save action while clean and no overlay", () => {
@@ -25,5 +25,26 @@ describe("settingsSaveDisplayState", () => {
       const headerPresented = !state.headerSaveHidden;
       expect(headerPresented && state.overlayVisible).toBe(false);
     }
+  });
+});
+
+describe("settingsPlatformDisplayState", () => {
+  it("shows the in-app shortcut only on macOS", () => {
+    expect(settingsPlatformDisplayState("macos")).toEqual({
+      shortcutFieldVisible: true,
+      desktopKeybindingHelpVisible: false,
+    });
+    expect(settingsPlatformDisplayState("linux")).toEqual({
+      shortcutFieldVisible: false,
+      desktopKeybindingHelpVisible: true,
+    });
+    expect(settingsPlatformDisplayState("windows")).toEqual({
+      shortcutFieldVisible: false,
+      desktopKeybindingHelpVisible: false,
+    });
+    expect(settingsPlatformDisplayState("web")).toEqual({
+      shortcutFieldVisible: false,
+      desktopKeybindingHelpVisible: false,
+    });
   });
 });

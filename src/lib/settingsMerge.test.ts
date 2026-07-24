@@ -88,6 +88,26 @@ describe("mergeExternalSettings", () => {
     });
   });
 
+  it("preserves a local shortcut edit while merging unrelated external changes", () => {
+    const shortcutBaseline = {
+      general: { sounds: true },
+      shortcut: { toggle: "Cmd+Shift+Space" },
+    };
+    const local = {
+      general: { sounds: true },
+      shortcut: { toggle: "Cmd+Option+D" },
+    };
+    const external = {
+      general: { sounds: false },
+      shortcut: { toggle: "Cmd+Shift+Space" },
+    };
+
+    expect(mergeExternalSettings(shortcutBaseline, local, external)).toEqual({
+      general: { sounds: false },
+      shortcut: { toggle: "Cmd+Option+D" },
+    });
+  });
+
   it("ignores a save response after any newer config event", () => {
     expect(shouldApplySaveResponse(4, 4)).toBe(true);
     expect(shouldApplySaveResponse(4, 5)).toBe(false);
