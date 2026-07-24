@@ -22,7 +22,7 @@ export async function mountUpdateFixture(state: "available" | "downloading"): Pr
   const mounted = mountStudioUpdater({
     adapter,
     eligibility: { packaged: true, mainWindow: true, visible: true, focused: true },
-    metadata: { productName: "PickScribe", productMark: "PS", currentVersion: "0.2.0" },
+    metadata: { productName: "PickScribe", productMark: "PS", currentVersion: "0.2.1" },
   });
 
   const controller = mounted.controller;
