@@ -67,11 +67,17 @@ then reset this file.
   typing-backend delivery strategy.
 - CI now blocks complexity regressions, coverage regressions, leaked secrets,
   and high or critical dependency advisories.
+- Added macOS compile support for the transparent float window and a blocking
+  macOS CI job that checks and tests the app on macOS 15.
 
 ## Validation
 
 ### Tested
 
+- Issue #59 (macOS compile support and CI): `cargo check --manifest-path
+  src-tauri/Cargo.toml`, `cargo test --manifest-path src-tauri/Cargo.toml` (37
+  tests), `bun install --frozen-lockfile && bun run check`, `bun run lint`, and
+  `bun run build` on macOS.
 - pickforge-platform#36 PR 4 (default-off shared update dialog): `bun run
   check`, `bunx vitest run` (39 tests, including flag selection,
   visible/focused deferral, and hidden-autostart single-check coverage), `bun

@@ -24,7 +24,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 pickscribe = { path = ".." }
 sentry = "0.42"
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"
