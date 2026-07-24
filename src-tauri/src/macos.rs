@@ -8,7 +8,7 @@
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
-    fn AXIsProcessTrusted() -> bool;
+    fn AXIsProcessTrusted() -> u8;
 }
 
 /// Returns whether this process has been granted Accessibility permission
@@ -16,7 +16,7 @@ unsafe extern "C" {
 /// `osascript`-driven paste/type delivery to work.
 #[cfg(target_os = "macos")]
 pub fn accessibility_trusted() -> bool {
-    unsafe { AXIsProcessTrusted() }
+    unsafe { AXIsProcessTrusted() != 0 }
 }
 
 #[cfg(not(target_os = "macos"))]

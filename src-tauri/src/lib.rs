@@ -111,6 +111,12 @@ mod tests {
     }
 
     #[test]
+    fn delivery_backend_checks_skip_unsupported_platforms() {
+        assert!(delivery_backend_checks("windows").is_empty());
+        assert!(delivery_backend_checks("unknown").is_empty());
+    }
+
+    #[test]
     fn strip_debug_image_paths_basenames_all_image_variants() {
         let apple_uuid = "2df005a8-67ab-4d33-98f2-52f9f6de4d15";
         let symbolic_id = "494f3aea-88fa-4296-9644-fa8ef5d139b6-1234";
@@ -535,45 +541,49 @@ fn run_doctor_checks() -> Vec<DoctorCheck> {
 /// via `pbcopy`/`osascript` (System Events) and needs Accessibility access;
 /// Linux delivers via wl-copy/xclip/xsel and ydotool.
 fn delivery_backend_checks(os: &str) -> Vec<(&'static str, bool, String)> {
-    if os == "macos" {
-        let trusted = macos::accessibility_trusted();
-        vec![
-            ("Clipboard", command_exists("pbcopy"), "pbcopy".into()),
-            (
-                "Paste backend",
-                trusted,
-                if trusted {
-                    "osascript (System Events) — Accessibility granted".into()
-                } else {
-                    "Accessibility not granted — enable PickScribe in System Settings \u{2192} Privacy & Security \u{2192} Accessibility, then relaunch".into()
-                },
-            ),
-        ]
-    } else {
-        let ydotool = command_exists("ydotool");
-        let socket = std::env::var("YDOTOOL_SOCKET")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "/tmp/.ydotool_socket".into());
-        let socket_ok = std::path::Path::new(&socket).exists();
-        vec![
-            (
-                "Paste backend",
-                ydotool && socket_ok,
-                if !ydotool {
-                    "ydotool not installed".into()
-                } else if !socket_ok {
-                    "ydotool installed, but ydotool.service socket not found".into()
-                } else {
-                    "ydotool + ydotoold socket".into()
-                },
-            ),
-            (
-                "Clipboard",
-                command_exists("wl-copy") || command_exists("xclip") || command_exists("xsel"),
-                "wl-copy / xclip / xsel".into(),
-            ),
-        ]
+    match os {
+        "macos" => {
+            let trusted = macos::accessibility_trusted();
+            vec![
+                ("Clipboard", command_exists("pbcopy"), "pbcopy".into()),
+                (
+                    "Paste backend",
+                    trusted,
+                    if trusted {
+                        "osascript (System Events) — Accessibility granted".into()
+                    } else {
+                        "Accessibility not granted — enable PickScribe in System Settings \u{2192} Privacy & Security \u{2192} Accessibility, then relaunch".into()
+                    },
+                ),
+            ]
+        }
+        "linux" => {
+            let ydotool = command_exists("ydotool");
+            let socket = std::env::var("YDOTOOL_SOCKET")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "/tmp/.ydotool_socket".into());
+            let socket_ok = std::path::Path::new(&socket).exists();
+            vec![
+                (
+                    "Paste backend",
+                    ydotool && socket_ok,
+                    if !ydotool {
+                        "ydotool not installed".into()
+                    } else if !socket_ok {
+                        "ydotool installed, but ydotool.service socket not found".into()
+                    } else {
+                        "ydotool + ydotoold socket".into()
+                    },
+                ),
+                (
+                    "Clipboard",
+                    command_exists("wl-copy") || command_exists("xclip") || command_exists("xsel"),
+                    "wl-copy / xclip / xsel".into(),
+                ),
+            ]
+        }
+        _ => Vec::new(),
     }
 }
 

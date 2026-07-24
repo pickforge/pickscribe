@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if command -v whisper-cli >/dev/null 2>&1; then
+  echo "whisper-cli is already available on PATH; nothing to install (Homebrew users can use: brew install whisper-cpp)."
+  exit 0
+fi
+
 SRC="${PICKSCRIBE_WHISPER_CPP_SRC:-${WHISPER_CPP_SRC:-$HOME/.local/src/whisper.cpp}}"
 BUILD="$SRC/build"
 BIN_DIR="$HOME/.local/bin"
@@ -17,12 +22,24 @@ else
   git -C "$SRC" pull --ff-only
 fi
 
-cmake -S "$SRC" -B "$BUILD" -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DWHISPER_BUILD_TESTS=OFF \
+cmake_args=(
+  -S "$SRC"
+  -B "$BUILD"
+  -DCMAKE_BUILD_TYPE=Release
+  -DWHISPER_BUILD_TESTS=OFF
   -DWHISPER_BUILD_EXAMPLES=ON
+)
+if command -v ninja >/dev/null 2>&1; then
+  cmake_args+=( -G Ninja )
+fi
+cmake "${cmake_args[@]}"
 
-cmake --build "$BUILD" --config Release --parallel "$(nproc)"
+case "$(uname -s)" in
+  Darwin) core_count="$(sysctl -n hw.ncpu)" ;;
+  Linux) core_count="$(nproc)" ;;
+  *) core_count=1 ;;
+esac
+cmake --build "$BUILD" --config Release --parallel "$core_count"
 
 if [[ -x "$BUILD/bin/whisper-cli" ]]; then
   ln -sf "$BUILD/bin/whisper-cli" "$BIN_DIR/whisper-cli"

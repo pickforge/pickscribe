@@ -265,8 +265,7 @@ struct FileJobComplete {
 }
 
 fn create_temp_dir() -> Result<PathBuf> {
-    let parent = recorder::state_dir();
-    fs::create_dir_all(&parent).with_context(|| format!("creating {}", parent.display()))?;
+    let parent = recorder::prepare_state_dir()?;
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())

@@ -29,6 +29,10 @@ Repo-local guide for agents working in PickScribe — local dictation for Linux
   tokens over raw values.
 - When command discovery returns a resolved path, spawn that path instead of the
   bare command so desktop `PATH` fallbacks keep working.
+- Test fakes must mirror the real implementation's error contract so tests do
+  not pin fake-only behavior.
+- Any spawned recording or capture child must have an owner with `Drop` cleanup
+  so app exit cannot orphan it.
 
 ## Releasing
 

@@ -78,7 +78,7 @@ fn write_wav(path: &PathBuf, segments: &[(f32, f32, f32)]) -> Result<()> {
 pub fn play(cue: Cue) {
     std::thread::spawn(move || {
         let Ok(path) = cue_path(&cue) else { return };
-        for player in ["pw-play", "paplay", "aplay"] {
+        for player in ["pw-play", "paplay", "aplay", "afplay"] {
             if let Some(program) = find_command(player) {
                 let _ = Command::new(program)
                     .arg(&path)

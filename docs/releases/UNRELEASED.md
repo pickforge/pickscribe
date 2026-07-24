@@ -6,6 +6,10 @@ then reset this file.
 
 ## User-facing changes
 
+- macOS dictation is now enabled end to end, with native cue playback and
+  appearance-aware tray icons. The macOS release remains blocked only on
+  Developer ID signing and notarization, and the local whisper.cpp installer
+  now supports Homebrew installs and portable build tooling on macOS.
 - On macOS, PickScribe can now start and stop dictation with a configurable
   in-app global shortcut (Cmd+Shift+Space by default). Linux continues to use
   the existing desktop-environment keybinding path.
@@ -106,6 +110,17 @@ then reset this file.
 - Whisper model auto-detection fix: `cargo test` and `cargo clippy --workspace
   --all-targets -- -D warnings`. Live-verified the installed
   `~/.local/share/whisper.cpp/models/ggml-base.en.bin` model is selected.
+- pickscribe#66 PR 5 (macOS platform polish and support flip): `cargo test`
+  (115 + 10 + 7 passing, 1 ignored), `cargo test --manifest-path
+  src-tauri/Cargo.toml` (38 passing), `cargo clippy --workspace --all-targets
+  -- -D warnings`, `bun install --frozen-lockfile`, `bunx vitest run` (42
+  passing), `bun run check`, and `bash -n scripts/install-whisper-cpp-local`
+  pass on macOS. Live checks played the generated start cue once through
+  `/usr/bin/afplay` at low volume and confirmed the `defaults read -g
+  AppleInterfaceStyle` result (`Dark`) matches the current System Events dark
+  appearance. `node tests/install-script-smoke.mjs` does not exercise the
+  whisper.cpp installer and remains blocked by the pre-existing
+  `scripts/install.sh` line 154 syntax error.
 - pickscribe#66 PR 2 (macOS audio capture via ffmpeg/avfoundation): `cargo
   test` (workspace root, 122 tests including new `recorder_args` and
   `platform` coverage), `cargo test --manifest-path src-tauri/Cargo.toml` (37
