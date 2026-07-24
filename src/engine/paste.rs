@@ -28,6 +28,7 @@ pub enum TypeBackend {
     Ydotool,
     Wtype,
     Xdotool,
+    Osascript,
     None,
 }
 
@@ -143,16 +144,22 @@ fn auto_hotkey_backend(
     runtime: &impl DeliveryRuntime,
     requested: TypeBackend,
 ) -> Option<TypeBackend> {
+    if runtime.is_macos() {
+        return (requested != TypeBackend::None).then_some(TypeBackend::Osascript);
+    }
     match requested {
         TypeBackend::Auto => [TypeBackend::Ydotool, TypeBackend::Xdotool]
             .into_iter()
             .find(|backend| runtime.command_exists(backend.command_name())),
         TypeBackend::Ydotool | TypeBackend::Xdotool => Some(requested),
-        TypeBackend::Wtype | TypeBackend::None => None,
+        TypeBackend::Wtype | TypeBackend::Osascript | TypeBackend::None => None,
     }
 }
 
 fn hotkey_backend(runtime: &impl DeliveryRuntime, requested: TypeBackend) -> Option<TypeBackend> {
+    if runtime.is_macos() {
+        return (requested != TypeBackend::None).then_some(TypeBackend::Osascript);
+    }
     match requested {
         TypeBackend::Auto => [TypeBackend::Ydotool, TypeBackend::Xdotool]
             .into_iter()
@@ -163,6 +170,9 @@ fn hotkey_backend(runtime: &impl DeliveryRuntime, requested: TypeBackend) -> Opt
 }
 
 fn typing_backend(runtime: &impl DeliveryRuntime, requested: TypeBackend) -> Option<TypeBackend> {
+    if runtime.is_macos() {
+        return (requested != TypeBackend::None).then_some(TypeBackend::Osascript);
+    }
     if requested != TypeBackend::Auto {
         return (requested != TypeBackend::None).then_some(requested);
     }
@@ -191,6 +201,7 @@ impl TypeBackend {
             Self::Ydotool => "ydotool",
             Self::Wtype => "wtype",
             Self::Xdotool => "xdotool",
+            Self::Osascript => "osascript",
             Self::Auto | Self::None => "",
         }
     }
@@ -199,6 +210,7 @@ impl TypeBackend {
 trait DeliveryRuntime {
     fn command_exists(&self, program: &str) -> bool;
     fn is_wayland(&self) -> bool;
+    fn is_macos(&self) -> bool;
     fn copy_to_clipboard(&mut self, text: &str) -> Result<()>;
     fn paste_with_hotkey(&mut self, backend: Option<TypeBackend>, chord: PasteChord) -> Result<()>;
     fn type_text(&mut self, backend: Option<TypeBackend>, text: &str) -> Result<()>;
@@ -218,7 +230,14 @@ impl DeliveryRuntime for ProcessRuntime {
             .unwrap_or(false)
     }
 
+    fn is_macos(&self) -> bool {
+        cfg!(target_os = "macos")
+    }
+
     fn copy_to_clipboard(&mut self, text: &str) -> Result<()> {
+        if self.is_macos() {
+            return run_with_stdin(resolved_program("pbcopy"), "pbcopy", &[], text);
+        }
         if let Some(program) = find_command("wl-copy") {
             run_with_stdin(&program, "wl-copy", &[], text)
         } else if let Some(program) = find_command("xclip") {
@@ -261,6 +280,7 @@ impl DeliveryRuntime for ProcessRuntime {
             Some(TypeBackend::Wtype) => Err(anyhow!(
                 "wtype cannot send paste shortcuts; use --paste-method type or install ydotool"
             )),
+            Some(TypeBackend::Osascript) => run_osascript(osascript_chord_script(chord)),
             Some(TypeBackend::Auto | TypeBackend::None) | None => Err(anyhow!(
                 "no paste hotkey backend found; install ydotool for Wayland or xdotool for X11"
             )),
@@ -284,6 +304,7 @@ impl DeliveryRuntime for ProcessRuntime {
             Some(TypeBackend::Wtype) => {
                 run_status(resolved_program("wtype"), "wtype", &[text])
             }
+            Some(TypeBackend::Osascript) => run_osascript(&osascript_type_script(text)),
             Some(TypeBackend::Auto | TypeBackend::None) | None => Err(anyhow!(
                 "no typing backend found; install ydotool for Wayland, wtype if your compositor supports it, or xdotool for X11"
             )),
@@ -360,6 +381,81 @@ fn run_status(
     }
 }
 
+/// AppleScript one-liner that synthesizes the paste chord via System Events.
+/// `PasteChord::CtrlV` maps to Command-V; `PasteChord::CtrlShiftV` to
+/// Command-Shift-V, matching macOS's paste and paste-and-match-style
+/// shortcuts respectively.
+fn osascript_chord_script(chord: PasteChord) -> &'static str {
+    match chord {
+        PasteChord::CtrlV => {
+            r#"tell application "System Events" to keystroke "v" using command down"#
+        }
+        PasteChord::CtrlShiftV => {
+            r#"tell application "System Events" to keystroke "v" using {command down, shift down}"#
+        }
+    }
+}
+
+const ACCESSIBILITY_DENIED_MESSAGE: &str = "PickScribe is not allowed to send keystrokes. Grant Accessibility access to PickScribe in System Settings \u{2192} Privacy & Security \u{2192} Accessibility, then try again.";
+
+/// Runs an AppleScript one-liner via `osascript -e`, mapping the
+/// Accessibility-denied failure (macOS error 1002, "not allowed to send
+/// keystrokes") to a clear, actionable message instead of the raw
+/// System Events error text.
+fn run_osascript(script: &str) -> Result<()> {
+    let output = Command::new(resolved_program("osascript"))
+        .args(["-e", script])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .with_context(|| "failed to start osascript".to_string())?;
+
+    map_osascript_output(output.status.success(), output.status.to_string(), &output.stderr)
+}
+
+/// Pure mapping from an `osascript` exit outcome to a `Result`, split out
+/// from `run_osascript` so the Accessibility-denied error mapping is
+/// testable without spawning a real process.
+fn map_osascript_output(success: bool, status: String, stderr: &[u8]) -> Result<()> {
+    if success {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(stderr);
+    if stderr.contains("not allowed to send keystrokes") || stderr.contains("1002") {
+        Err(anyhow!(ACCESSIBILITY_DENIED_MESSAGE))
+    } else {
+        Err(anyhow!(
+            "osascript exited with {status}: {}",
+            stderr.trim()
+        ))
+    }
+}
+
+/// Builds the AppleScript that types `text` via System Events keystroke
+/// calls. Backslashes and double quotes are escaped so the text is safe to
+/// embed in AppleScript string literals; AppleScript string literals cannot
+/// contain a literal newline, so each line is sent as its own `keystroke`
+/// call with a `keystroke return` in between to reproduce line breaks.
+fn osascript_type_script(text: &str) -> String {
+    let mut script = String::from("tell application \"System Events\"\n");
+    let lines: Vec<&str> = text.split('\n').collect();
+    for (index, line) in lines.iter().enumerate() {
+        if index > 0 {
+            script.push_str("\tkeystroke return\n");
+        }
+        script.push_str("\tkeystroke \"");
+        script.push_str(&escape_applescript_string(line));
+        script.push_str("\"\n");
+    }
+    script.push_str("end tell");
+    script
+}
+
+fn escape_applescript_string(text: &str) -> String {
+    text.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,6 +464,7 @@ mod tests {
     struct FakeRuntime {
         available: Vec<TypeBackend>,
         wayland: bool,
+        macos: bool,
         copy_fails: bool,
         insertion_fails: bool,
         copied: bool,
@@ -385,6 +482,10 @@ mod tests {
 
         fn is_wayland(&self) -> bool {
             self.wayland
+        }
+
+        fn is_macos(&self) -> bool {
+            self.macos
         }
 
         fn copy_to_clipboard(&mut self, _text: &str) -> Result<()> {
@@ -528,6 +629,16 @@ mod tests {
         assert_eq!(outcome.insertion_error.unwrap().to_string(), "paste failed");
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "temporary live smoke check, run manually via --ignored on macOS"]
+    fn live_smoke_pbcopy_round_trips_through_process_runtime() {
+        let marker = "pickscribe-macos-smoke-check";
+        ProcessRuntime.copy_to_clipboard(marker).unwrap();
+        let output = Command::new("pbpaste").output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout), marker);
+    }
+
     #[test]
     fn no_delivery_method_can_still_copy() {
         let mut runtime = FakeRuntime::default();
@@ -540,5 +651,108 @@ mod tests {
         assert!(runtime.pasted.is_none());
         assert!(runtime.typed.is_none());
         assert!(runtime.slept_ms.is_empty());
+    }
+
+    #[test]
+    fn macos_auto_resolves_to_hotkey_via_osascript_without_any_linux_tool_present() {
+        let mut runtime = FakeRuntime {
+            macos: true,
+            ..Default::default()
+        };
+        let config = config(DeliveryMethod::Auto);
+
+        let outcome = deliver_with(&mut runtime, &config, "hello");
+
+        assert!(outcome.into_result().is_ok());
+        assert_eq!(
+            runtime.pasted,
+            Some((TypeBackend::Osascript, PasteChord::CtrlV))
+        );
+        assert!(runtime.typed.is_none());
+    }
+
+    #[test]
+    fn macos_type_method_always_selects_osascript() {
+        let mut runtime = FakeRuntime {
+            macos: true,
+            ..Default::default()
+        };
+        let config = config(DeliveryMethod::Type);
+
+        let outcome = deliver_with(&mut runtime, &config, "hello");
+
+        assert!(outcome.into_result().is_ok());
+        assert_eq!(runtime.typed, Some((TypeBackend::Osascript, "hello".into())));
+    }
+
+    #[test]
+    fn macos_none_backend_still_disables_insertion() {
+        let mut runtime = FakeRuntime {
+            macos: true,
+            ..Default::default()
+        };
+        let mut config = config(DeliveryMethod::Auto);
+        config.type_backend = TypeBackend::None;
+
+        let outcome = deliver_with(&mut runtime, &config, "hello");
+
+        // Auto with no usable backend falls back to Type, which then finds
+        // no backend either, so insertion silently no-ops instead of erroring.
+        assert!(outcome.into_result().is_ok());
+        assert!(runtime.pasted.is_none());
+        assert!(runtime.typed.is_none());
+    }
+
+    #[test]
+    fn macos_chord_mapping_uses_command_and_command_shift() {
+        let ctrl_v = osascript_chord_script(PasteChord::CtrlV);
+        let ctrl_shift_v = osascript_chord_script(PasteChord::CtrlShiftV);
+
+        assert!(ctrl_v.contains("using command down"));
+        assert!(!ctrl_v.contains("shift"));
+        assert!(ctrl_shift_v.contains("using {command down, shift down}"));
+    }
+
+    #[test]
+    fn osascript_type_script_escapes_quotes_and_backslashes() {
+        let script = osascript_type_script(r#"say "hi" \ bye"#);
+
+        assert_eq!(
+            script,
+            "tell application \"System Events\"\n\tkeystroke \"say \\\"hi\\\" \\\\ bye\"\nend tell"
+        );
+    }
+
+    #[test]
+    fn osascript_type_script_sends_return_between_lines() {
+        let script = osascript_type_script("line one\nline two");
+
+        assert_eq!(
+            script,
+            "tell application \"System Events\"\n\tkeystroke \"line one\"\n\tkeystroke return\n\tkeystroke \"line two\"\nend tell"
+        );
+    }
+
+    #[test]
+    fn accessibility_denied_stderr_maps_to_actionable_message() {
+        let result = map_osascript_output(
+            false,
+            "exit status: 1".into(),
+            b"osascript: error: System Events got an error: PickScribe is not allowed to send keystrokes. (1002)",
+        );
+
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("Accessibility"));
+        assert!(message.contains("System Settings"));
+    }
+
+    #[test]
+    fn other_osascript_failures_keep_the_raw_stderr() {
+        let result = map_osascript_output(false, "exit status: 1".into(), b"some other failure");
+
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "osascript exited with exit status: 1: some other failure"
+        );
     }
 }
