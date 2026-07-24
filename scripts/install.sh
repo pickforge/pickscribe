@@ -7,9 +7,9 @@ set -eu
 REPO="pickforge/pickscribe"
 APP_NAME="PickScribe"
 BIN_NAME="pickscribe-app"
-# The window's app_id (bundle identifier). The .desktop basename and
-# StartupWMClass must equal it or the running window shows a generic icon.
+# The window's app_id (bundle identifier) determines the .desktop basename.
 APP_ID="pickscribe-app"
+WM_CLASS="Pickscribe-app"
 
 # Environment overrides:
 #   PICKSCRIBE_INSTALL_DIR  Linux AppImage target dir. Default: $HOME/.local/bin.
@@ -213,8 +213,8 @@ desktop_escape() {
 write_desktop_launcher() {
   launcher_command=$1
   launcher_dir="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
-  # Basename and StartupWMClass must equal the window's app_id so the desktop
-  # environment ties the running window to this entry (and its icon).
+  # The desktop environment uses the runtime window class to tie the running
+  # window to this entry (and its icon).
   launcher_file="$launcher_dir/$APP_ID.desktop"
 
   mkdir -p "$launcher_dir" 2>/dev/null || return 0
@@ -226,7 +226,7 @@ write_desktop_launcher() {
     printf 'Comment=Local Linux dictation and cleanup\n'
     printf 'Exec="%s"\n' "$launcher_exec"
     printf 'Icon=%s\n' "$APP_ID"
-    printf 'StartupWMClass=%s\n' "$APP_ID"
+    printf 'StartupWMClass=%s\n' "$WM_CLASS"
     printf 'Terminal=false\n'
     printf 'Categories=Development;\n'
     printf 'Keywords=pickscribe;dictation;transcription;voice;\n'
