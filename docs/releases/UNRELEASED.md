@@ -69,11 +69,36 @@ then reset this file.
   and high or critical dependency advisories.
 - Added macOS compile support for the transparent float window and a blocking
   macOS CI job that checks and tests the app on macOS 15.
+- Added native macOS microphone capture via `ffmpeg`'s `avfoundation` input
+  device (16kHz mono s16 WAV, matching the Linux PipeWire pipeline), reusing
+  the existing recorder process/stop/log machinery instead of a separate
+  CoreAudio backend. `SttConfig::recorder` now defaults to `ffmpeg` on macOS
+  and `pw-record` on Linux; explicit user config is unaffected. Removed the
+  "Native audio capture" release blocker for macOS (dictation as a whole
+  remains blocked on paste automation, global shortcuts, and signing). The
+  doctor page now probes the platform-appropriate recorder (`ffmpeg` on
+  macOS, `pw-record` on Linux) before the dictation-support early return.
+  Added `src-tauri/Info.plist` with `NSMicrophoneUsageDescription`, which
+  Tauri 2 merges into the generated macOS bundle `Info.plist`.
 
 ## Validation
 
 ### Tested
 
+- pickscribe#66 PR 2 (macOS audio capture via ffmpeg/avfoundation): `cargo
+  test` (workspace root, 122 tests including new `recorder_args` and
+  `platform` coverage), `cargo test --manifest-path src-tauri/Cargo.toml` (37
+  tests), `cargo clippy --workspace --all-targets -- -D warnings` (matches CI).
+  Verified device syntax on this machine with `ffmpeg -f avfoundation
+  -list_devices true -i ""` and confirmed `:default` is accepted as the input
+  target with this ffmpeg build (8.1). Live smoke: spawned the app's exact
+  `ffmpeg -nostdin -hide_banner -f avfoundation -i :default -ar 16000 -ac 1
+  -c:a pcm_s16le -y <path>` args, stopped with `SIGINT` after ~2s matching
+  `Recording::stop`'s escalation path — ffmpeg exited normally ("received
+  signal 2") and produced a valid 37,966-byte WAV, well above the 8KB
+  too-short threshold. No macOS TCC microphone permission prompt appeared;
+  Terminal already had mic authorization on this machine from an earlier
+  `-list_devices` probe.
 - Issue #59 (macOS compile support and CI): `cargo check --manifest-path
   src-tauri/Cargo.toml`, `cargo test --manifest-path src-tauri/Cargo.toml` (37
   tests), `bun install --frozen-lockfile && bun run check`, `bun run lint`, and

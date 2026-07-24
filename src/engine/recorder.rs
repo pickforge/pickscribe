@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -42,7 +42,7 @@ pub fn start(cfg: &SttConfig) -> Result<Recording> {
     let log_file = fs::File::create(&log_path).context("creating recorder log file")?;
 
     let recorder = if cfg.recorder.is_empty() {
-        "pw-record"
+        crate::config::default_recorder_command()
     } else {
         &cfg.recorder
     };
@@ -51,21 +51,9 @@ pub fn start(cfg: &SttConfig) -> Result<Recording> {
     } else {
         super::find_command(recorder).unwrap_or_else(|| PathBuf::from(recorder))
     };
+    let args = recorder_args(recorder, cfg, &audio_path);
     let mut cmd = Command::new(program);
-    cmd.arg("--media-category")
-        .arg("Capture")
-        .arg("--media-role")
-        .arg("Communication")
-        .arg("--rate")
-        .arg("16000")
-        .arg("--channels")
-        .arg("1")
-        .arg("--format")
-        .arg("s16");
-    if !cfg.audio_target.is_empty() {
-        cmd.arg("--target").arg(&cfg.audio_target);
-    }
-    cmd.arg(&audio_path)
+    cmd.args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::from(log_file));
@@ -80,6 +68,60 @@ pub fn start(cfg: &SttConfig) -> Result<Recording> {
         log_path,
         started: Instant::now(),
     })
+}
+
+/// Build the recorder's argument vector for the given recorder command,
+/// config, and output path. The ffmpeg/avfoundation shape is selected purely
+/// by the recorder command's file stem, matching the pw-record vs. ffmpeg
+/// binaries the recorder can actually be pointed at.
+fn recorder_args(recorder: &str, cfg: &SttConfig, audio_path: &Path) -> Vec<String> {
+    let stem = std::path::Path::new(recorder)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(recorder);
+
+    if stem == "ffmpeg" {
+        let target = if !cfg.audio_target.is_empty() {
+            cfg.audio_target.clone()
+        } else {
+            "default".into()
+        };
+        return vec![
+            "-nostdin".into(),
+            "-hide_banner".into(),
+            "-f".into(),
+            "avfoundation".into(),
+            "-i".into(),
+            format!(":{target}"),
+            "-ar".into(),
+            "16000".into(),
+            "-ac".into(),
+            "1".into(),
+            "-c:a".into(),
+            "pcm_s16le".into(),
+            "-y".into(),
+            audio_path.display().to_string(),
+        ];
+    }
+
+    let mut args = vec![
+        "--media-category".to_string(),
+        "Capture".into(),
+        "--media-role".into(),
+        "Communication".into(),
+        "--rate".into(),
+        "16000".into(),
+        "--channels".into(),
+        "1".into(),
+        "--format".into(),
+        "s16".into(),
+    ];
+    if !cfg.audio_target.is_empty() {
+        args.push("--target".into());
+        args.push(cfg.audio_target.clone());
+    }
+    args.push(audio_path.display().to_string());
+    args
 }
 
 impl Recording {
@@ -155,4 +197,111 @@ fn wait_exit(child: &mut Child, timeout: Duration) -> bool {
         std::thread::sleep(Duration::from_millis(100));
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pw_record_args_are_unchanged() {
+        let cfg = SttConfig {
+            recorder: "pw-record".into(),
+            ..Default::default()
+        };
+        let audio_path = PathBuf::from("/tmp/rec.wav");
+
+        let args = recorder_args("pw-record", &cfg, &audio_path);
+
+        assert_eq!(
+            args,
+            vec![
+                "--media-category",
+                "Capture",
+                "--media-role",
+                "Communication",
+                "--rate",
+                "16000",
+                "--channels",
+                "1",
+                "--format",
+                "s16",
+                "/tmp/rec.wav",
+            ]
+        );
+    }
+
+    #[test]
+    fn pw_record_args_include_target_when_set() {
+        let cfg = SttConfig {
+            recorder: "pw-record".into(),
+            audio_target: "alsa_input.usb-mic".into(),
+            ..Default::default()
+        };
+        let audio_path = PathBuf::from("/tmp/rec.wav");
+
+        let args = recorder_args("pw-record", &cfg, &audio_path);
+
+        assert!(args.contains(&"--target".to_string()));
+        assert!(args.contains(&"alsa_input.usb-mic".to_string()));
+        assert_eq!(args.last().unwrap(), "/tmp/rec.wav");
+    }
+
+    #[test]
+    fn ffmpeg_args_use_default_avfoundation_target_on_macos() {
+        let cfg = SttConfig {
+            recorder: "ffmpeg".into(),
+            ..Default::default()
+        };
+        let audio_path = PathBuf::from("/tmp/rec.wav");
+
+        let args = recorder_args("ffmpeg", &cfg, &audio_path);
+
+        assert_eq!(
+            args,
+            vec![
+                "-nostdin",
+                "-hide_banner",
+                "-f",
+                "avfoundation",
+                "-i",
+                ":default",
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-c:a",
+                "pcm_s16le",
+                "-y",
+                "/tmp/rec.wav",
+            ]
+        );
+    }
+
+    #[test]
+    fn ffmpeg_args_use_explicit_audio_target() {
+        let cfg = SttConfig {
+            recorder: "ffmpeg".into(),
+            audio_target: "2".into(),
+            ..Default::default()
+        };
+        let audio_path = PathBuf::from("/tmp/rec.wav");
+
+        let args = recorder_args("ffmpeg", &cfg, &audio_path);
+
+        assert!(args.contains(&":2".to_string()));
+    }
+
+    #[test]
+    fn ffmpeg_selection_is_driven_by_recorder_stem_not_os() {
+        let cfg = SttConfig {
+            recorder: "/opt/homebrew/bin/ffmpeg".into(),
+            ..Default::default()
+        };
+        let audio_path = PathBuf::from("/tmp/rec.wav");
+
+        let args = recorder_args("/opt/homebrew/bin/ffmpeg", &cfg, &audio_path);
+
+        assert!(args.contains(&"avfoundation".to_string()));
+    }
 }

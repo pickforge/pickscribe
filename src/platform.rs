@@ -66,10 +66,6 @@ fn support_for(os: &str) -> PlatformSupport {
             "macOS release is blocked until the native host path is implemented and signed.",
             [
                 (
-                    "Native audio capture",
-                    "CoreAudio/AVFoundation microphone capture backend is missing.",
-                ),
-                (
                     "Paste automation",
                     "Clipboard plus accessibility-driven paste backend is missing.",
                 ),
@@ -177,7 +173,7 @@ mod tests {
 
         assert_eq!(support.release_status, ReleaseStatus::Blocked);
         assert!(!support.dictation_supported);
-        assert!(blocker_names.contains(&"Native audio capture"));
+        assert!(!blocker_names.contains(&"Native audio capture"));
         assert!(blocker_names.contains(&"Paste automation"));
         assert!(blocker_names.contains(&"Global shortcuts"));
         assert!(blocker_names.contains(&"Tray/window behavior validation"));
