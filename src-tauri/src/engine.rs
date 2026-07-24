@@ -256,27 +256,46 @@ impl Engine {
         }
     }
 
-    // TODO(#63): split legacy recording startup into capped helpers.
-    #[allow(clippy::too_many_lines)]
     pub fn start(self: &Arc<Self>, app: &AppHandle) {
-        let support = platform::current();
-        if let Some(message) = support.unsupported_dictation_message() {
-            if AppConfig::load().general.sounds {
-                sounds::play(sounds::Cue::Error);
-            }
-            self.set_state(app, |s| {
-                s.stage = Stage::Idle;
-                s.recording_started_ms = None;
-                s.segments.clear();
-                s.error = Some(message);
-                s.message = None;
-            });
+        if self.reject_unsupported_platform(app) {
             return;
         }
 
         let cfg = AppConfig::load();
-        let recording = match recorder::start(&cfg.stt) {
-            Ok(rec) => rec,
+        let Some(recording) = self.start_recorder(app, &cfg) else {
+            return;
+        };
+        if cfg.general.sounds {
+            sounds::play(sounds::Cue::Start);
+        }
+
+        let (audio_path, session_id) = self.begin_recording_session(app, &cfg, recording);
+
+        self.spawn_recorder_warmup_check(app, session_id);
+        self.spawn_level_meter(app, audio_path);
+    }
+
+    fn reject_unsupported_platform(&self, app: &AppHandle) -> bool {
+        let support = platform::current();
+        let Some(message) = support.unsupported_dictation_message() else {
+            return false;
+        };
+        if AppConfig::load().general.sounds {
+            sounds::play(sounds::Cue::Error);
+        }
+        self.set_state(app, |s| {
+            s.stage = Stage::Idle;
+            s.recording_started_ms = None;
+            s.segments.clear();
+            s.error = Some(message);
+            s.message = None;
+        });
+        true
+    }
+
+    fn start_recorder(&self, app: &AppHandle, cfg: &AppConfig) -> Option<recorder::Recording> {
+        match recorder::start(&cfg.stt) {
+            Ok(rec) => Some(rec),
             Err(err) => {
                 if cfg.general.sounds {
                     sounds::play(sounds::Cue::Error);
@@ -288,12 +307,17 @@ impl Engine {
                     s.error = Some(format!("{err:#}"));
                     s.message = None;
                 });
-                return;
+                None
             }
-        };
-        if cfg.general.sounds {
-            sounds::play(sounds::Cue::Start);
         }
+    }
+
+    fn begin_recording_session(
+        self: &Arc<Self>,
+        app: &AppHandle,
+        cfg: &AppConfig,
+        recording: recorder::Recording,
+    ) -> (PathBuf, String) {
         let audio_path = recording.audio_path.clone();
         let session_id = format!("{}-{}", now_ms(), std::process::id());
         let cancel_token = CancelToken::new();
@@ -301,7 +325,7 @@ impl Engine {
             let temp_dir = recorder::state_dir().join("incremental").join(&session_id);
             match self.prepare_incremental_worker(
                 app,
-                &cfg,
+                cfg,
                 audio_path.clone(),
                 session_id.clone(),
                 cancel_token.clone(),
@@ -363,41 +387,45 @@ impl Engine {
             });
         }
 
-        // Recorder warm-up check, off the command thread so toggling stays
-        // responsive: if the recorder exited immediately, surface the error
-        // and tear the session down.
-        {
-            let engine = Arc::clone(self);
-            let check_app = app.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(250));
-                let err = {
-                    let mut guard = engine.recording.lock().unwrap();
-                    match guard.as_mut() {
-                        Some(active) if active.session_id == session_id => {
-                            active.recording.exit_error()
-                        }
-                        _ => None,
-                    }
-                };
-                let Some(err) = err else {
-                    return;
-                };
-                engine.cancel(&check_app);
-                if AppConfig::load().general.sounds {
-                    sounds::play(sounds::Cue::Error);
-                }
-                engine.set_state(&check_app, |s| {
-                    s.stage = Stage::Idle;
-                    s.recording_started_ms = None;
-                    s.segments.clear();
-                    s.error = Some(err);
-                    s.message = None;
-                });
-            });
-        }
+        (audio_path, session_id)
+    }
 
-        // Live level meter for the waveform.
+    // Recorder warm-up check, off the command thread so toggling stays
+    // responsive: if the recorder exited immediately, surface the error
+    // and tear the session down.
+    fn spawn_recorder_warmup_check(self: &Arc<Self>, app: &AppHandle, session_id: String) {
+        let engine = Arc::clone(self);
+        let check_app = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(250));
+            let err = {
+                let mut guard = engine.recording.lock().unwrap();
+                match guard.as_mut() {
+                    Some(active) if active.session_id == session_id => {
+                        active.recording.exit_error()
+                    }
+                    _ => None,
+                }
+            };
+            let Some(err) = err else {
+                return;
+            };
+            engine.cancel(&check_app);
+            if AppConfig::load().general.sounds {
+                sounds::play(sounds::Cue::Error);
+            }
+            engine.set_state(&check_app, |s| {
+                s.stage = Stage::Idle;
+                s.recording_started_ms = None;
+                s.segments.clear();
+                s.error = Some(err);
+                s.message = None;
+            });
+        });
+    }
+
+    // Live level meter for the waveform.
+    fn spawn_level_meter(self: &Arc<Self>, app: &AppHandle, audio_path: PathBuf) {
         self.levels_running.store(true, Ordering::SeqCst);
         let running = Arc::clone(&self.levels_running);
         let level_app = app.clone();
@@ -578,8 +606,6 @@ impl Engine {
         }
     }
 
-    // TODO(#63): split legacy pipeline orchestration into capped helpers.
-    #[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
     fn run_pipeline(self: Arc<Self>, app: &AppHandle, cfg: AppConfig, active: ActiveRecording) {
         let ActiveRecording {
             session_id,
@@ -588,47 +614,91 @@ impl Engine {
             incremental,
         } = active;
 
-        let fail = |err: String| {
-            if !self.is_session_current(&session_id, &cancel_token) {
-                return;
-            }
-            if cfg.general.sounds {
-                sounds::play(sounds::Cue::Error);
-            }
-            let (error, message) = lifecycle::failure_outcome(err);
+        let Some((duration_ms, raw)) =
+            self.acquire_transcript(app, &cfg, &session_id, &cancel_token, incremental, recording)
+        else {
+            return;
+        };
+
+        if raw.is_empty() {
+            let (error, message) = lifecycle::no_speech_outcome();
             let _ = self.finish_session(app, &session_id, &cancel_token, |s| {
                 s.stage = Stage::Idle;
                 s.recording_started_ms = None;
                 s.segments.clear();
-                s.error = error;
                 s.message = message;
+                s.error = error;
             });
-        };
-
-        let (audio_path, duration_ms) = match recording.stop() {
-            Ok(result) => result,
-            Err(err) => return fail(format!("{err:#}")),
-        };
-        if !self.is_session_current(&session_id, &cancel_token) {
-            if !cfg.general.keep_audio {
-                let _ = fs::remove_file(&audio_path);
-            }
             return;
         }
 
-        let raw = match self.incremental_result(&cfg, incremental, &session_id, &cancel_token) {
+        self.clean_and_deliver(app, &cfg, &session_id, &cancel_token, duration_ms, raw);
+    }
+
+    fn fail_session(
+        &self,
+        app: &AppHandle,
+        cfg: &AppConfig,
+        session_id: &str,
+        cancel_token: &CancelToken,
+        err: String,
+    ) {
+        if !self.is_session_current(session_id, cancel_token) {
+            return;
+        }
+        if cfg.general.sounds {
+            sounds::play(sounds::Cue::Error);
+        }
+        let (error, message) = lifecycle::failure_outcome(err);
+        let _ = self.finish_session(app, session_id, cancel_token, |s| {
+            s.stage = Stage::Idle;
+            s.recording_started_ms = None;
+            s.segments.clear();
+            s.error = error;
+            s.message = message;
+        });
+    }
+
+    /// Stop the recorder and resolve the final transcript text, handling the
+    /// incremental-result/fallback-tail dispatch and every stale-session
+    /// guard along the way. Returns `None` once the session has already been
+    /// failed or torn down and the caller should just return.
+    fn acquire_transcript(
+        &self,
+        app: &AppHandle,
+        cfg: &AppConfig,
+        session_id: &str,
+        cancel_token: &CancelToken,
+        incremental: Option<ActiveIncremental>,
+        recording: recorder::Recording,
+    ) -> Option<(u64, String)> {
+        let (audio_path, duration_ms) = match recording.stop() {
+            Ok(result) => result,
+            Err(err) => {
+                self.fail_session(app, cfg, session_id, cancel_token, format!("{err:#}"));
+                return None;
+            }
+        };
+        if !self.is_session_current(session_id, cancel_token) {
+            if !cfg.general.keep_audio {
+                let _ = fs::remove_file(&audio_path);
+            }
+            return None;
+        }
+
+        let raw = match self.incremental_result(cfg, incremental, session_id, cancel_token) {
             IncrementalResult::Complete(text) => Ok(text),
             outcome => {
-                if !self.is_session_current(&session_id, &cancel_token) {
+                if !self.is_session_current(session_id, cancel_token) {
                     if !cfg.general.keep_audio {
                         let _ = fs::remove_file(&audio_path);
                     }
-                    return;
+                    return None;
                 }
-                let is_cancelled = || !self.is_session_current(&session_id, &cancel_token);
+                let is_cancelled = || !self.is_session_current(session_id, cancel_token);
                 match outcome {
                     IncrementalResult::Partial(prefix) => {
-                        match slice_fallback_tail(&cfg, &audio_path, &prefix) {
+                        match slice_fallback_tail(cfg, &audio_path, &prefix) {
                             // Recording ended inside the already-transcribed
                             // prefix — nothing left to transcribe.
                             Ok(None) => Ok(prefix.raw_text),
@@ -657,38 +727,39 @@ impl Engine {
                 if !cfg.general.keep_audio {
                     let _ = fs::remove_file(&audio_path);
                 }
-                return fail(format!("{err:#}"));
+                self.fail_session(app, cfg, session_id, cancel_token, format!("{err:#}"));
+                return None;
             }
         };
         if !cfg.general.keep_audio {
             let _ = fs::remove_file(&audio_path);
         }
-        if !self.is_session_current(&session_id, &cancel_token) {
-            return;
+        if !self.is_session_current(session_id, cancel_token) {
+            return None;
         }
-        if raw.is_empty() {
-            let (error, message) = lifecycle::no_speech_outcome();
-            let _ = self.finish_session(app, &session_id, &cancel_token, |s| {
-                s.stage = Stage::Idle;
-                s.recording_started_ms = None;
-                s.segments.clear();
-                s.message = message;
-                s.error = error;
-            });
-            return;
-        }
+        Some((duration_ms, raw))
+    }
 
-        if !self.set_state_for_session(app, &session_id, &cancel_token, |s| {
+    fn clean_and_deliver(
+        &self,
+        app: &AppHandle,
+        cfg: &AppConfig,
+        session_id: &str,
+        cancel_token: &CancelToken,
+        duration_ms: u64,
+        raw: String,
+    ) {
+        if !self.set_state_for_session(app, session_id, cancel_token, |s| {
             s.stage = Stage::Cleaning
         }) {
             return;
         }
-        let outcome = cleanup::clean(&cfg, &raw);
-        if !self.is_session_current(&session_id, &cancel_token) {
+        let outcome = cleanup::clean(cfg, &raw);
+        if !self.is_session_current(session_id, cancel_token) {
             return;
         }
 
-        if !self.set_state_for_session(app, &session_id, &cancel_token, |s| {
+        if !self.set_state_for_session(app, session_id, cancel_token, |s| {
             s.stage = Stage::Pasting
         }) {
             return;
@@ -702,7 +773,7 @@ impl Engine {
             .into_result()
             .err()
             .map(|err| format!("paste failed (text copied if possible): {err:#}"));
-        if !self.is_session_current(&session_id, &cancel_token) {
+        if !self.is_session_current(session_id, cancel_token) {
             return;
         }
 
@@ -741,7 +812,7 @@ impl Engine {
         };
         let delivered = lifecycle::delivery_outcome(paste_error, &outcome, last_entry);
 
-        let _ = self.finish_session(app, &session_id, &cancel_token, |s| {
+        let _ = self.finish_session(app, session_id, cancel_token, |s| {
             s.stage = Stage::Idle;
             s.recording_started_ms = None;
             s.segments.clear();

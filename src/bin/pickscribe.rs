@@ -1087,8 +1087,6 @@ fn transcribe(args: &Args, audio_path: &Path) -> Result<String> {
     }
 }
 
-// TODO(#63): extract the legacy whisper process orchestration below the cap.
-#[allow(clippy::too_many_lines)]
 fn transcribe_incremental_segment(
     args: &Args,
     audio_path: &Path,
@@ -1101,62 +1099,87 @@ fn transcribe_incremental_segment(
         .as_deref()
         .filter(|value| !value.is_empty())
     {
-        let model = args
-            .whisper_model
-            .as_ref()
-            .map(|path| path.display().to_string())
-            .unwrap_or_default();
-        let command = custom
-            .replace("{audio}", &shell_escape(&audio_path.display().to_string()))
-            .replace("{model}", &shell_escape(&model))
-            .replace(
-                "{output}",
-                &shell_escape(&output_prefix.display().to_string()),
-            );
-        let stdout_path = output_prefix.with_extension("transcript.stdout.log");
-        let stderr_path = output_prefix.with_extension("transcript.stderr.log");
-        let stdout_file = File::create(&stdout_path)
-            .with_context(|| format!("failed to create {}", stdout_path.display()))?;
-        let stderr_file = File::create(&stderr_path)
-            .with_context(|| format!("failed to create {}", stderr_path.display()))?;
-        let (mut cmd, process_group) = cancellable_shell_command();
-        cmd.arg("-lc")
-            .arg(&command)
-            .stdout(Stdio::from(stdout_file))
-            .stderr(Stdio::from(stderr_file));
-        let mut child = cmd
-            .spawn()
-            .with_context(|| format!("failed to run custom STT command: {command}"))?;
-        let status = match wait_for_cancellable_child(&mut child, process_group, is_cancelled) {
-            Ok(status) => status,
-            Err(err) => {
-                cleanup_segment_transcript_files(audio_path);
-                return Err(err);
-            }
-        };
-        if !status.success() {
-            let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
-            cleanup_segment_transcript_files(audio_path);
-            bail!(
-                "custom STT command failed with {}:\n{}",
-                status,
-                stderr.trim()
-            );
-        }
-
-        let txt_path = transcript_txt_path_for(audio_path);
-        let output = if txt_path.exists() {
-            fs::read_to_string(&txt_path)
-                .with_context(|| format!("failed to read {}", txt_path.display()))?
-        } else {
-            fs::read_to_string(&stdout_path)
-                .with_context(|| format!("failed to read {}", stdout_path.display()))?
-        };
-        let _ = fs::remove_file(&stdout_path);
-        let _ = fs::remove_file(&stderr_path);
-        return Ok(output);
+        return transcribe_with_custom_command(
+            args,
+            audio_path,
+            &output_prefix,
+            custom,
+            is_cancelled,
+        );
     }
 
+    transcribe_with_whisper_cpp(args, audio_path, &output_prefix, is_cancelled)
+}
+
+fn transcribe_with_custom_command(
+    args: &Args,
+    audio_path: &Path,
+    output_prefix: &Path,
+    custom: &str,
+    is_cancelled: impl Fn() -> bool,
+) -> Result<String> {
+    let model = args
+        .whisper_model
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    let command = custom
+        .replace("{audio}", &shell_escape(&audio_path.display().to_string()))
+        .replace("{model}", &shell_escape(&model))
+        .replace(
+            "{output}",
+            &shell_escape(&output_prefix.display().to_string()),
+        );
+    let stdout_path = output_prefix.with_extension("transcript.stdout.log");
+    let stderr_path = output_prefix.with_extension("transcript.stderr.log");
+    let stdout_file = File::create(&stdout_path)
+        .with_context(|| format!("failed to create {}", stdout_path.display()))?;
+    let stderr_file = File::create(&stderr_path)
+        .with_context(|| format!("failed to create {}", stderr_path.display()))?;
+    let (mut cmd, process_group) = cancellable_shell_command();
+    cmd.arg("-lc")
+        .arg(&command)
+        .stdout(Stdio::from(stdout_file))
+        .stderr(Stdio::from(stderr_file));
+    let mut child = cmd
+        .spawn()
+        .with_context(|| format!("failed to run custom STT command: {command}"))?;
+    let status = match wait_for_cancellable_child(&mut child, process_group, is_cancelled) {
+        Ok(status) => status,
+        Err(err) => {
+            cleanup_segment_transcript_files(audio_path);
+            return Err(err);
+        }
+    };
+    if !status.success() {
+        let stderr = fs::read_to_string(&stderr_path).unwrap_or_default();
+        cleanup_segment_transcript_files(audio_path);
+        bail!(
+            "custom STT command failed with {}:\n{}",
+            status,
+            stderr.trim()
+        );
+    }
+
+    let txt_path = transcript_txt_path_for(audio_path);
+    let output = if txt_path.exists() {
+        fs::read_to_string(&txt_path)
+            .with_context(|| format!("failed to read {}", txt_path.display()))?
+    } else {
+        fs::read_to_string(&stdout_path)
+            .with_context(|| format!("failed to read {}", stdout_path.display()))?
+    };
+    let _ = fs::remove_file(&stdout_path);
+    let _ = fs::remove_file(&stderr_path);
+    Ok(output)
+}
+
+fn transcribe_with_whisper_cpp(
+    args: &Args,
+    audio_path: &Path,
+    output_prefix: &Path,
+    is_cancelled: impl Fn() -> bool,
+) -> Result<String> {
     let whisper = resolve_whisper_command(args)?;
     let stderr_path = output_prefix.with_extension("transcript.stderr.log");
     let stderr_file = File::create(&stderr_path)
@@ -1171,7 +1194,7 @@ fn transcribe_incremental_segment(
         .arg(audio_path)
         .arg("--output-txt")
         .arg("--output-file")
-        .arg(&output_prefix)
+        .arg(output_prefix)
         .arg("--no-prints");
 
     if let Some(language) = args.language.as_deref().filter(|value| !value.is_empty()) {

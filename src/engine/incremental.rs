@@ -367,8 +367,6 @@ pub enum RunResult {
 /// progress state (the `RecordingSession` and when to publish it), the
 /// fallback/completion decision, and the final drain. STT execution, live
 /// segment cleanup, and progress transport are the host's job.
-// TODO(#63): split the legacy session driver into capped orchestration helpers.
-#[allow(clippy::too_many_lines)]
 pub fn run(
     host: &mut impl IncrementalHost,
     audio_path: &Path,
@@ -379,138 +377,24 @@ pub fn run(
     let mut next_start_ms = 0u64;
     let mut segment_id = 0u64;
 
-    let stop = 'run: loop {
+    let stop = loop {
         if drain_and_publish(host, &mut session) {
             // published below alongside other state changes too; draining
             // alone is enough reason to republish.
         }
 
-        match host.control() {
-            Control::Abandoned => {
-                host.cleanup_artifacts();
-                return RunResult::Abandoned;
-            }
-            Control::Cancelled => break 'run StopOutcome::cancelled(),
-            control => {
-                let final_requested = matches!(control, Control::Stopping);
-                let available_ms = audio_segments::duration_ms(audio_path).unwrap_or(0);
-
-                let (start_ms, desired_end_ms) =
-                    match next_step(next_start_ms, available_ms, final_requested, &cfg) {
-                        Step::Wait => {
-                            std::thread::sleep(POLL_INTERVAL);
-                            continue 'run;
-                        }
-                        Step::Stop(stop) => break 'run stop,
-                        Step::Produce {
-                            start_ms,
-                            desired_end_ms,
-                        } => (start_ms, desired_end_ms),
-                    };
-
-                let end_ms =
-                    choose_segment_end(audio_path, start_ms, desired_end_ms, available_ms, final_requested);
-                match after_boundary(start_ms, end_ms, available_ms, final_requested) {
-                    BoundaryStep::Wait => {
-                        std::thread::sleep(POLL_INTERVAL);
-                        continue 'run;
-                    }
-                    BoundaryStep::Stop(stop) => break 'run stop,
-                    BoundaryStep::Proceed => {}
-                }
-
-                segment_id = segment_id.saturating_add(1);
-                let slice_start_ms = start_ms.saturating_sub(cfg.overlap_ms);
-                let segment_path = host.segment_path(segment_id);
-                let slice_result =
-                    audio_segments::slice_wav(audio_path, &segment_path, slice_start_ms, end_ms);
-
-                let slice = match classify_slice(slice_result, final_requested, available_ms, start_ms) {
-                    SliceStep::Wait => {
-                        std::thread::sleep(POLL_INTERVAL);
-                        continue 'run;
-                    }
-                    SliceStep::Stop(stop) => break 'run stop,
-                    SliceStep::Failed(err) => {
-                        session.upsert_segment(TranscriptSegment::failed(
-                            segment_id,
-                            slice_start_ms,
-                            end_ms,
-                            err,
-                        ));
-                        host.publish(&session);
-                        break 'run StopOutcome::fallback();
-                    }
-                    SliceStep::Use(slice) => slice,
-                };
-
-                session.upsert_segment(TranscriptSegment {
-                    id: segment_id,
-                    start_ms: slice.start_ms,
-                    end_ms: slice.end_ms,
-                    status: TranscriptSegmentStatus::Transcribing,
-                    raw_text: String::new(),
-                    cleaned_text: None,
-                    error: None,
-                });
-                host.publish(&session);
-
-                let job = SegmentJob {
-                    segment_id,
-                    audio_path: segment_path.clone(),
-                    start_ms: slice.start_ms,
-                    end_ms: slice.end_ms,
-                };
-                let result = host.transcribe(&job);
-                if !host.keep_audio() {
-                    let _ = fs::remove_file(&segment_path);
-                }
-
-                match host.control() {
-                    Control::Abandoned => {
-                        host.cleanup_artifacts();
-                        return RunResult::Abandoned;
-                    }
-                    Control::Cancelled => break 'run StopOutcome::cancelled(),
-                    _ => {}
-                }
-
-                match result {
-                    Ok(text) => {
-                        let raw = TranscriptSegment::raw_ready(
-                            segment_id,
-                            slice.start_ms,
-                            slice.end_ms,
-                            text,
-                        );
-                        session.upsert_segment(raw.clone());
-                        host.publish(&session);
-
-                        if !raw.raw_text.trim().is_empty() && host.try_queue_cleanup(raw.clone()) {
-                            session.upsert_segment(TranscriptSegment {
-                                status: TranscriptSegmentStatus::Cleaning,
-                                ..raw
-                            });
-                            host.publish(&session);
-                        }
-                    }
-                    Err(err) => {
-                        session.upsert_segment(TranscriptSegment::failed(
-                            segment_id,
-                            slice.start_ms,
-                            slice.end_ms,
-                            format!("{err:#}"),
-                        ));
-                        host.publish(&session);
-                        break 'run StopOutcome::fallback();
-                    }
-                }
-
-                next_start_ms = slice.end_ms;
-                if final_requested && next_start_ms >= available_ms {
-                    break 'run StopOutcome::finished();
-                }
-            }
+        match advance(
+            host,
+            audio_path,
+            &cfg,
+            &mut session,
+            &mut next_start_ms,
+            &mut segment_id,
+        ) {
+            Progress::Abandoned => return RunResult::Abandoned,
+            Progress::Stop(stop) => break stop,
+            Progress::Wait => std::thread::sleep(POLL_INTERVAL),
+            Progress::Advanced => {}
         }
     };
 
@@ -521,6 +405,210 @@ pub fn run(
         complete: stop.complete,
         fallback_required: stop.fallback_required,
     })
+}
+
+/// One tick of the driver loop: check the host's control signal, decide the
+/// next segment's bounds, and (if any) produce and dispatch it.
+enum Progress {
+    /// Not enough new audio yet, or a transient block; sleep and re-check.
+    Wait,
+    /// A segment was handled; loop again immediately.
+    Advanced,
+    /// The host was abandoned mid-tick; `run` must return without publishing.
+    Abandoned,
+    /// Terminal outcome reached.
+    Stop(StopOutcome),
+}
+
+fn advance(
+    host: &mut impl IncrementalHost,
+    audio_path: &Path,
+    cfg: &SchedulingConfig,
+    session: &mut RecordingSession,
+    next_start_ms: &mut u64,
+    segment_id: &mut u64,
+) -> Progress {
+    match host.control() {
+        Control::Abandoned => {
+            host.cleanup_artifacts();
+            Progress::Abandoned
+        }
+        Control::Cancelled => Progress::Stop(StopOutcome::cancelled()),
+        control => {
+            let bounds = match compute_segment_bounds(audio_path, cfg, *next_start_ms, control) {
+                BoundsOutcome::Wait => return Progress::Wait,
+                BoundsOutcome::Stop(stop) => return Progress::Stop(stop),
+                BoundsOutcome::Ready(bounds) => bounds,
+            };
+
+            produce_segment(
+                host,
+                audio_path,
+                cfg,
+                session,
+                segment_id,
+                next_start_ms,
+                &bounds,
+            )
+        }
+    }
+}
+
+/// A segment's resolved cut points, and the request context they were
+/// resolved under.
+struct Bounds {
+    start_ms: u64,
+    end_ms: u64,
+    available_ms: u64,
+    final_requested: bool,
+}
+
+enum BoundsOutcome {
+    Wait,
+    Stop(StopOutcome),
+    Ready(Bounds),
+}
+
+fn compute_segment_bounds(
+    audio_path: &Path,
+    cfg: &SchedulingConfig,
+    next_start_ms: u64,
+    control: Control,
+) -> BoundsOutcome {
+    let final_requested = matches!(control, Control::Stopping);
+    let available_ms = audio_segments::duration_ms(audio_path).unwrap_or(0);
+
+    let (start_ms, desired_end_ms) =
+        match next_step(next_start_ms, available_ms, final_requested, cfg) {
+            Step::Wait => return BoundsOutcome::Wait,
+            Step::Stop(stop) => return BoundsOutcome::Stop(stop),
+            Step::Produce {
+                start_ms,
+                desired_end_ms,
+            } => (start_ms, desired_end_ms),
+        };
+
+    let end_ms = choose_segment_end(
+        audio_path,
+        start_ms,
+        desired_end_ms,
+        available_ms,
+        final_requested,
+    );
+    match after_boundary(start_ms, end_ms, available_ms, final_requested) {
+        BoundaryStep::Wait => BoundsOutcome::Wait,
+        BoundaryStep::Stop(stop) => BoundsOutcome::Stop(stop),
+        BoundaryStep::Proceed => BoundsOutcome::Ready(Bounds {
+            start_ms,
+            end_ms,
+            available_ms,
+            final_requested,
+        }),
+    }
+}
+
+/// Slice, dispatch, and record the outcome of one segment; advances
+/// `next_start_ms` (or reaches a terminal [`Progress::Stop`]) on success.
+fn produce_segment(
+    host: &mut impl IncrementalHost,
+    audio_path: &Path,
+    cfg: &SchedulingConfig,
+    session: &mut RecordingSession,
+    segment_id: &mut u64,
+    next_start_ms: &mut u64,
+    bounds: &Bounds,
+) -> Progress {
+    *segment_id = segment_id.saturating_add(1);
+    let segment_id = *segment_id;
+    let slice_start_ms = bounds.start_ms.saturating_sub(cfg.overlap_ms);
+    let segment_path = host.segment_path(segment_id);
+    let slice_result =
+        audio_segments::slice_wav(audio_path, &segment_path, slice_start_ms, bounds.end_ms);
+
+    let slice = match classify_slice(
+        slice_result,
+        bounds.final_requested,
+        bounds.available_ms,
+        bounds.start_ms,
+    ) {
+        SliceStep::Wait => return Progress::Wait,
+        SliceStep::Stop(stop) => return Progress::Stop(stop),
+        SliceStep::Failed(err) => {
+            session.upsert_segment(TranscriptSegment::failed(
+                segment_id,
+                slice_start_ms,
+                bounds.end_ms,
+                err,
+            ));
+            host.publish(session);
+            return Progress::Stop(StopOutcome::fallback());
+        }
+        SliceStep::Use(slice) => slice,
+    };
+
+    session.upsert_segment(TranscriptSegment {
+        id: segment_id,
+        start_ms: slice.start_ms,
+        end_ms: slice.end_ms,
+        status: TranscriptSegmentStatus::Transcribing,
+        raw_text: String::new(),
+        cleaned_text: None,
+        error: None,
+    });
+    host.publish(session);
+
+    let job = SegmentJob {
+        segment_id,
+        audio_path: segment_path.clone(),
+        start_ms: slice.start_ms,
+        end_ms: slice.end_ms,
+    };
+    let result = host.transcribe(&job);
+    if !host.keep_audio() {
+        let _ = fs::remove_file(&segment_path);
+    }
+
+    match host.control() {
+        Control::Abandoned => {
+            host.cleanup_artifacts();
+            return Progress::Abandoned;
+        }
+        Control::Cancelled => return Progress::Stop(StopOutcome::cancelled()),
+        _ => {}
+    }
+
+    match result {
+        Ok(text) => {
+            let raw = TranscriptSegment::raw_ready(segment_id, slice.start_ms, slice.end_ms, text);
+            session.upsert_segment(raw.clone());
+            host.publish(session);
+
+            if !raw.raw_text.trim().is_empty() && host.try_queue_cleanup(raw.clone()) {
+                session.upsert_segment(TranscriptSegment {
+                    status: TranscriptSegmentStatus::Cleaning,
+                    ..raw
+                });
+                host.publish(session);
+            }
+        }
+        Err(err) => {
+            session.upsert_segment(TranscriptSegment::failed(
+                segment_id,
+                slice.start_ms,
+                slice.end_ms,
+                format!("{err:#}"),
+            ));
+            host.publish(session);
+            return Progress::Stop(StopOutcome::fallback());
+        }
+    }
+
+    *next_start_ms = slice.end_ms;
+    if bounds.final_requested && *next_start_ms >= bounds.available_ms {
+        Progress::Stop(StopOutcome::finished())
+    } else {
+        Progress::Advanced
+    }
 }
 
 fn drain_and_publish(host: &mut impl IncrementalHost, session: &mut RecordingSession) -> bool {
