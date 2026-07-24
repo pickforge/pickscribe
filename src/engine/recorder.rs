@@ -8,30 +8,64 @@ use anyhow::{Context, Result, bail};
 use crate::config::SttConfig;
 
 pub struct Recording {
-    child: Child,
+    child: Option<Child>,
     pub audio_path: PathBuf,
     pub log_path: PathBuf,
     pub started: Instant,
 }
 
 pub fn state_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("PICKSCRIBE_STATE_DIR")
+    state_dir_from_env(|name| std::env::var(name).ok())
+}
+
+fn state_dir_from_env(mut var: impl FnMut(&str) -> Option<String>) -> PathBuf {
+    if let Some(dir) = var("PICKSCRIBE_STATE_DIR")
         && !dir.is_empty()
     {
         return PathBuf::from(dir);
     }
-    if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR")
+    if let Some(dir) = var("XDG_RUNTIME_DIR")
         && !dir.is_empty()
     {
         return PathBuf::from(dir).join("pickscribe");
     }
-    let user = std::env::var("USER").unwrap_or_else(|_| "user".into());
+    if let Some(dir) = var("TMPDIR")
+        && !dir.is_empty()
+    {
+        return PathBuf::from(dir).join("pickscribe");
+    }
+    let user = var("USER").unwrap_or_else(|| "user".into());
     PathBuf::from(format!("/tmp/pickscribe-{user}"))
 }
 
-pub fn start(cfg: &SttConfig) -> Result<Recording> {
+pub fn prepare_state_dir() -> Result<PathBuf> {
     let dir = state_dir();
-    fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    prepare_state_dir_at(&dir)?;
+    Ok(dir)
+}
+
+fn prepare_state_dir_at(dir: &Path) -> Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder
+        .create(dir)
+        .with_context(|| format!("creating {}", dir.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("securing {}", dir.display()))?;
+    }
+    Ok(())
+}
+
+pub fn start(cfg: &SttConfig) -> Result<Recording> {
+    let dir = prepare_state_dir()?;
 
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -63,7 +97,7 @@ pub fn start(cfg: &SttConfig) -> Result<Recording> {
         .with_context(|| format!("starting recorder `{recorder}`"))?;
 
     Ok(Recording {
-        child,
+        child: Some(child),
         audio_path,
         log_path,
         started: Instant::now(),
@@ -134,7 +168,7 @@ impl Recording {
     /// shortly after `start` — off the UI thread — instead of `start`
     /// sleeping on the command path.
     pub fn exit_error(&mut self) -> Option<String> {
-        let status = self.child.try_wait().ok()??;
+        let status = self.child.as_mut()?.try_wait().ok()??;
         let log = fs::read_to_string(&self.log_path).unwrap_or_default();
         Some(format!(
             "recorder exited immediately ({status}): {}",
@@ -145,15 +179,19 @@ impl Recording {
     /// Stop the recorder gracefully (SIGINT so the WAV header is finalized),
     /// escalating to SIGTERM/SIGKILL if needed.
     pub fn stop(mut self) -> Result<(PathBuf, u64)> {
-        let pid = self.child.id();
         let duration = self.duration_ms();
+        let mut child = self
+            .child
+            .take()
+            .context("recorder process already stopped")?;
+        let pid = child.id();
 
         signal(pid, "INT");
-        if !wait_exit(&mut self.child, Duration::from_secs(5)) {
+        if !wait_exit(&mut child, Duration::from_secs(5)) {
             signal(pid, "TERM");
-            if !wait_exit(&mut self.child, Duration::from_secs(2)) {
-                let _ = self.child.kill();
-                let _ = self.child.wait();
+            if !wait_exit(&mut child, Duration::from_secs(2)) {
+                let _ = child.kill();
+                let _ = child.wait();
             }
         }
 
@@ -170,14 +208,44 @@ impl Recording {
 
     /// Stop and discard everything.
     pub fn cancel(mut self) {
-        let pid = self.child.id();
-        signal(pid, "INT");
-        if !wait_exit(&mut self.child, Duration::from_secs(2)) {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+        if let Some(mut child) = self.child.take() {
+            let pid = child.id();
+            signal(pid, "INT");
+            if !wait_exit(&mut child, Duration::from_secs(2)) {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
         }
         let _ = fs::remove_file(&self.audio_path);
         let _ = fs::remove_file(&self.log_path);
+    }
+
+    #[cfg(test)]
+    fn from_child(child: Child) -> Self {
+        Self {
+            child: Some(child),
+            audio_path: PathBuf::new(),
+            log_path: PathBuf::new(),
+            started: Instant::now(),
+        }
+    }
+}
+
+impl Drop for Recording {
+    fn drop(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        match child.try_wait() {
+            Ok(Some(_)) => {}
+            Ok(None) | Err(_) => {
+                signal(child.id(), "INT");
+                if !wait_exit(&mut child, Duration::from_secs(2)) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            }
+        }
     }
 }
 
@@ -202,6 +270,68 @@ fn wait_exit(child: &mut Child, timeout: Duration) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn state_dir_uses_tmpdir_before_the_shared_tmp_fallback() {
+        let dir = state_dir_from_env(|name| match name {
+            "TMPDIR" => Some("/private/var/folders/user/T".into()),
+            "USER" => Some("alice".into()),
+            _ => None,
+        });
+
+        assert_eq!(dir, PathBuf::from("/private/var/folders/user/T/pickscribe"));
+    }
+
+    #[test]
+    fn state_dir_keeps_explicit_and_xdg_precedence() {
+        let explicit = state_dir_from_env(|name| match name {
+            "PICKSCRIBE_STATE_DIR" => Some("/custom/state".into()),
+            "XDG_RUNTIME_DIR" => Some("/run/user/1000".into()),
+            "TMPDIR" => Some("/private/tmp".into()),
+            _ => None,
+        });
+        let xdg = state_dir_from_env(|name| match name {
+            "XDG_RUNTIME_DIR" => Some("/run/user/1000".into()),
+            "TMPDIR" => Some("/private/tmp".into()),
+            _ => None,
+        });
+
+        assert_eq!(explicit, PathBuf::from("/custom/state"));
+        assert_eq!(xdg, PathBuf::from("/run/user/1000/pickscribe"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prepared_state_dir_has_private_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("state");
+        fs::create_dir(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+
+        prepare_state_dir_at(&dir).unwrap();
+
+        let mode = fs::metadata(dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dropping_recording_terminates_and_reaps_child() {
+        let child = Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = child.id();
+
+        drop(Recording::from_child(child));
+
+        let status = Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(!status.success(), "recording child {pid} is still alive");
+    }
 
     #[test]
     fn pw_record_args_are_unchanged() {

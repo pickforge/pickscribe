@@ -49,7 +49,8 @@
     config !== null && savedJson !== "" && JSON.stringify($state.snapshot(config)) !== savedJson
   );
   const saveDisplay = $derived(settingsSaveDisplayState(dirty));
-  const platformDisplay = settingsPlatformDisplayState(hostPlatform());
+  const platform = hostPlatform();
+  const platformDisplay = settingsPlatformDisplayState(platform);
 
   $effect(() => {
     onDirtyChange(dirty);
@@ -470,7 +471,11 @@
             placeholder="default microphone"
             bind:value={config.stt.audio_target}
           />
-          <span class="hint">PipeWire node name, leave empty for the default source.</span>
+          <span class="hint">
+            {platform === "macos"
+              ? "AVFoundation audio device index or name; empty uses the system default."
+              : "PipeWire node name, leave empty for the default source."}
+          </span>
         </div>
       </div>
     </div>
@@ -606,8 +611,10 @@
         <div class="field">
           <label for="paste-chord">Paste chord</label>
           <select id="paste-chord" class="select" bind:value={config.paste.chord}>
-            <option value="ctrl-v">Ctrl+V</option>
-            <option value="ctrl-shift-v">Ctrl+Shift+V (terminals)</option>
+            <option value="ctrl-v">{platform === "macos" ? "Cmd+V" : "Ctrl+V"}</option>
+            <option value="ctrl-shift-v">
+              {platform === "macos" ? "Cmd+Shift+V" : "Ctrl+Shift+V (terminals)"}
+            </option>
           </select>
         </div>
         <div class="field">

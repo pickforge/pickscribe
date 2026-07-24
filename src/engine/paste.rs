@@ -502,9 +502,14 @@ mod tests {
             backend: Option<TypeBackend>,
             chord: PasteChord,
         ) -> Result<()> {
-            if let Some(backend) = backend {
-                self.pasted = Some((backend, chord));
-            }
+            let Some(backend) =
+                backend.filter(|backend| !matches!(backend, TypeBackend::Auto | TypeBackend::None))
+            else {
+                return Err(anyhow!(
+                    "no paste hotkey backend found; install ydotool for Wayland or xdotool for X11"
+                ));
+            };
+            self.pasted = Some((backend, chord));
             if self.insertion_fails {
                 Err(anyhow!("paste failed"))
             } else {
@@ -513,9 +518,14 @@ mod tests {
         }
 
         fn type_text(&mut self, backend: Option<TypeBackend>, text: &str) -> Result<()> {
-            if let Some(backend) = backend {
-                self.typed = Some((backend, text.into()));
-            }
+            let Some(backend) =
+                backend.filter(|backend| !matches!(backend, TypeBackend::Auto | TypeBackend::None))
+            else {
+                return Err(anyhow!(
+                    "no typing backend found; install ydotool for Wayland, wtype if your compositor supports it, or xdotool for X11"
+                ));
+            };
+            self.typed = Some((backend, text.into()));
             if self.insertion_fails {
                 Err(anyhow!("type failed"))
             } else {
@@ -696,9 +706,12 @@ mod tests {
 
         let outcome = deliver_with(&mut runtime, &config, "hello");
 
-        // Auto with no usable backend falls back to Type, which then finds
-        // no backend either, so insertion silently no-ops instead of erroring.
-        assert!(outcome.into_result().is_ok());
+        assert!(outcome.clipboard_error.is_none());
+        assert_eq!(
+            outcome.insertion_error.as_ref().unwrap().to_string(),
+            "no typing backend found; install ydotool for Wayland, wtype if your compositor supports it, or xdotool for X11"
+        );
+        assert!(outcome.into_result().is_err());
         assert!(runtime.pasted.is_none());
         assert!(runtime.typed.is_none());
     }
