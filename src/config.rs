@@ -58,8 +58,19 @@ impl Default for SttConfig {
             model_path: String::new(),
             language: "auto".into(),
             audio_target: String::new(),
-            recorder: "pw-record".into(),
+            recorder: default_recorder_command().into(),
         }
+    }
+}
+
+/// Recorder command used when `SttConfig::recorder` is unset: pw-record on
+/// Linux, ffmpeg (avfoundation) on macOS. Explicit user-configured `recorder`
+/// values always take precedence over this default.
+pub fn default_recorder_command() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "ffmpeg"
+    } else {
+        "pw-record"
     }
 }
 

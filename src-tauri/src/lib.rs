@@ -422,6 +422,16 @@ async fn run_doctor() -> CommandResult<Vec<DoctorCheck>> {
         .map_err(err_string)
 }
 
+/// The recorder binary the doctor page probes for, per release-target OS.
+/// Returns `None` for platforms without a known recorder yet.
+fn audio_recorder_check(os: &str) -> Option<(bool, String)> {
+    match os {
+        "macos" => Some((command_exists("ffmpeg"), "ffmpeg (avfoundation)".into())),
+        "linux" => Some((command_exists("pw-record"), "pw-record (PipeWire)".into())),
+        _ => None,
+    }
+}
+
 fn run_doctor_checks() -> Vec<DoctorCheck> {
     let cfg = AppConfig::load();
     let support = platform::current();
@@ -446,15 +456,13 @@ fn run_doctor_checks() -> Vec<DoctorCheck> {
     for blocker in &support.blockers {
         push(&blocker.name, false, blocker.detail.clone());
     }
+    if let Some((ok, detail)) = audio_recorder_check(&support.os) {
+        push("Audio recorder", ok, detail);
+    }
     if !support.dictation_supported {
         return checks;
     }
 
-    push(
-        "Audio recorder",
-        command_exists("pw-record"),
-        "pw-record (PipeWire)".into(),
-    );
     push(
         "Whisper",
         command_exists("whisper-cli"),
