@@ -61,24 +61,16 @@ fn support_for(os: &str) -> PlatformSupport {
             summary: "Linux release target: PipeWire capture, whisper.cpp, Linux clipboard/paste helpers, tray, floating window, and signed updater artifacts.".into(),
             blockers: Vec::new(),
         },
-        "macos" => blocked(
-            "macos",
-            "macOS release is blocked until the native host path is implemented and signed.",
-            [
-                (
-                    "Tray/window behavior validation",
-                    "Menu bar, dock, main window, and floating window behavior are not validated.",
-                ),
-                (
-                    "Signing/notarization",
-                    "Developer ID signing and notarization are not configured.",
-                ),
-                (
-                    "Native-host smoke tests",
-                    "Deferred for this PR; required before a real macOS release.",
-                ),
-            ],
-        ),
+        "macos" => PlatformSupport {
+            os: "macos".into(),
+            release_status: ReleaseStatus::Blocked,
+            dictation_supported: true,
+            summary: "macOS dictation is supported; release is blocked pending Developer ID signing and notarization.".into(),
+            blockers: vec![PlatformBlocker {
+                name: "Signing/notarization".into(),
+                detail: "Developer ID signing and notarization are not configured.".into(),
+            }],
+        },
         "windows" => blocked(
             "windows",
             "Windows release is blocked until the native host path is implemented and code-signed.",
@@ -155,22 +147,18 @@ mod tests {
     }
 
     #[test]
-    fn macos_release_lists_required_native_work() {
+    fn macos_supports_dictation_with_signing_as_its_only_release_blocker() {
         let support = support_for("macos");
-        let blocker_names = support
-            .blockers
-            .iter()
-            .map(|blocker| blocker.name.as_str())
-            .collect::<Vec<_>>();
 
         assert_eq!(support.release_status, ReleaseStatus::Blocked);
-        assert!(!support.dictation_supported);
-        assert!(!blocker_names.contains(&"Native audio capture"));
-        assert!(!blocker_names.contains(&"Paste automation"));
-        assert!(!blocker_names.contains(&"Global shortcuts"));
-        assert!(blocker_names.contains(&"Tray/window behavior validation"));
-        assert!(blocker_names.contains(&"Signing/notarization"));
-        assert!(blocker_names.contains(&"Native-host smoke tests"));
+        assert!(support.dictation_supported);
+        assert_eq!(support.unsupported_dictation_message(), None);
+        assert_eq!(support.blockers.len(), 1);
+        assert_eq!(support.blockers[0].name, "Signing/notarization");
+        assert_eq!(
+            support.blockers[0].detail,
+            "Developer ID signing and notarization are not configured."
+        );
     }
 
     #[test]

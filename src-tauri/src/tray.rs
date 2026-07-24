@@ -50,9 +50,22 @@ pub(crate) fn refresh_panel_prefers_dark() -> bool {
     value
 }
 
-/// Asks the XDG settings portal: 0 = no preference, 1 = dark, 2 = light.
-/// Defaults to dark on any failure, matching the original icon set.
+/// Probes the platform appearance setting. An unset macOS style means light;
+/// other failures default to dark, matching the original icon set.
 fn probe_panel_prefers_dark() -> bool {
+    if cfg!(target_os = "macos") {
+        return match std::process::Command::new("defaults")
+            .args(["read", "-g", "AppleInterfaceStyle"])
+            .output()
+        {
+            Ok(out) if out.status.success() => {
+                String::from_utf8_lossy(&out.stdout).contains("Dark")
+            }
+            Ok(_) => false,
+            Err(_) => true,
+        };
+    }
+
     let output = std::process::Command::new("gdbus")
         .args([
             "call",
