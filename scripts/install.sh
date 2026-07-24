@@ -277,6 +277,17 @@ warn_signature_verification_skipped() {
   printf '\n' >&2
 }
 
+# BSD base64 (older macOS) only accepts `-D` for decode; GNU base64 (Linux)
+# and modern macOS accept `-d`. Try `-d` first, then fall back to `-D`, so
+# decoding works across both without misdetecting the platform.
+decode_base64_to() {
+  decode_src=$1
+  decode_dest=$2
+
+  base64 -d < "$decode_src" > "$decode_dest" 2>/dev/null ||
+    base64 -D < "$decode_src" > "$decode_dest" 2>/dev/null
+}
+
 # Verifies the downloaded asset against its `<asset>.sig` companion (a
 # base64-wrapped minisign signature, as published by the Tauri updater
 # bundler) before the archive is parsed or installed. If a compatible
@@ -297,7 +308,7 @@ verify_asset_signature() {
     die "failed to download the signature for $asset_name; refusing to install an unverified asset (found $verifier_cmd on PATH, so verification is mandatory)"
   [ -s "$sig_encoded_path" ] || die "downloaded signature for $asset_name is empty"
 
-  base64 -d < "$sig_encoded_path" > "$sig_path" 2>/dev/null ||
+  decode_base64_to "$sig_encoded_path" "$sig_path" ||
     die "failed to decode the signature for $asset_name"
   [ -s "$sig_path" ] || die "decoded signature for $asset_name is empty"
 

@@ -154,6 +154,29 @@ esac
   );
 }
 
+// Writes a `base64` that rejects `-d` (like older BSD/macOS base64, which
+// only supports `-D`) so tests can prove install.sh's decode_base64_to()
+// actually falls back to `-D` instead of assuming GNU-style `-d` support.
+function writeFakeBase64DOnly(fakebin) {
+  writeExecutable(
+    join(fakebin, "base64"),
+    `#!/bin/sh
+case "\${1:-}" in
+  -d)
+    exit 1
+    ;;
+  -D)
+    cat
+    exit 0
+    ;;
+  *)
+    exit 64
+    ;;
+esac
+`,
+  );
+}
+
 // Writes a fake `minisign` (or `rsign`) that records the arguments it was
 // called with and exits with `exitCode`, standing in for real signature
 // verification so tests can force the pass/fail outcome deterministically.
@@ -180,7 +203,7 @@ function baseEnv(root, fixture, extraEnv) {
   };
 }
 
-function runInstaller(root, fixture, extraEnv = {}, { verifier } = {}) {
+function runInstaller(root, fixture, extraEnv = {}, { verifier, fakeBase64DOnly } = {}) {
   const fakebin = join(root, "fakebin");
   mkdirSync(fakebin, { recursive: true });
   writeFakeCurl(fakebin);
@@ -188,6 +211,9 @@ function runInstaller(root, fixture, extraEnv = {}, { verifier } = {}) {
   writeFakeSysctl(fakebin);
   if (verifier) {
     writeFakeVerifier(fakebin, verifier);
+  }
+  if (fakeBase64DOnly) {
+    writeFakeBase64DOnly(fakebin);
   }
 
   const env = {
@@ -203,7 +229,7 @@ function runInstaller(root, fixture, extraEnv = {}, { verifier } = {}) {
   });
 }
 
-function runInstallerFailure(root, fixture, extraEnv = {}, { verifier } = {}) {
+function runInstallerFailure(root, fixture, extraEnv = {}, { verifier, fakeBase64DOnly } = {}) {
   const fakebin = join(root, "fakebin");
   mkdirSync(fakebin, { recursive: true });
   writeFakeCurl(fakebin);
@@ -211,6 +237,9 @@ function runInstallerFailure(root, fixture, extraEnv = {}, { verifier } = {}) {
   writeFakeSysctl(fakebin);
   if (verifier) {
     writeFakeVerifier(fakebin, verifier);
+  }
+  if (fakeBase64DOnly) {
+    writeFakeBase64DOnly(fakebin);
   }
 
   const env = {
@@ -375,6 +404,19 @@ test("verifier present + good signature installs and reports verification", (roo
   assert.equal(existsSync(join(root, "home", ".local", "bin", "PickScribe.AppImage")), true);
   const calls = readFileSync(callLog, "utf8");
   assert.match(calls, /-P RWSh3tOmmtL9yYOe9M6YhBqmVJx3TibwJaHXYq4YbYKONVfjlBdKqRk6/);
+});
+
+test("verifier present + -d-unsupported base64 falls back to -D and still verifies", (root) => {
+  const fixture = writeFixture(root);
+  const callLog = join(root, "minisign-calls.log");
+
+  const output = runInstaller(root, fixture, {}, {
+    verifier: { name: "minisign", exitCode: 0, callLog },
+    fakeBase64DOnly: true,
+  });
+
+  assert.match(output, /PickScribe_9\.9\.9_amd64\.AppImage signature verified \(minisign\)\./);
+  assert.equal(existsSync(join(root, "home", ".local", "bin", "PickScribe.AppImage")), true);
 });
 
 test("verifier present + bad signature aborts before install", (root) => {
