@@ -27,8 +27,8 @@ function writeFixture(root) {
     JSON.stringify({
       tag_name: "v9.9.9",
       assets: [
-        { browser_download_url: "https://example.test/PickScribe_9.9.9_amd64.AppImage" },
-        { browser_download_url: "https://example.test/PickScribe_9.9.9_aarch64.app.tar.gz" },
+        { browser_download_url: "https://github.com/pickforge/pickscribe/releases/download/v9.9.9/PickScribe_9.9.9_amd64.AppImage" },
+        { browser_download_url: "https://github.com/pickforge/pickscribe/releases/download/v9.9.9/PickScribe_9.9.9_aarch64.app.tar.gz" },
       ],
     }),
   );
@@ -38,17 +38,23 @@ function writeFixture(root) {
 exit 0
 `,
   );
+  writeMacBundleFixture(fixture, "first bundle");
+  return fixture;
+}
+
+function writeMacBundleFixture(fixture, marker) {
   const bundleRoot = join(fixture, "bundle");
   const bundleBinary = join(bundleRoot, "PickScribe.app", "Contents", "MacOS", "pickscribe-app");
+  rmSync(bundleRoot, { recursive: true, force: true });
   mkdirSync(join(bundleRoot, "PickScribe.app", "Contents", "MacOS"), { recursive: true });
   writeExecutable(
     bundleBinary,
     `#!/bin/sh
+# ${marker}
 printf '%s\\n' "$@" > "$HOME/wrapper-args"
 `,
   );
   execFileSync("tar", ["-czf", join(fixture, "PickScribe_9.9.9_aarch64.app.tar.gz"), "-C", bundleRoot, "PickScribe.app"]);
-  return fixture;
 }
 
 function writeFakeUname(fakebin) {
@@ -60,6 +66,19 @@ case "\${1:-}" in
   -m) printf '%s\\n' "$PICKSCRIBE_TEST_ARCH" ;;
   *) exit 64 ;;
 esac
+`,
+  );
+}
+
+function writeFakeSysctl(fakebin) {
+  writeExecutable(
+    join(fakebin, "sysctl"),
+    `#!/bin/sh
+if [ "\${1:-}" = "-in" ] && [ "\${2:-}" = "sysctl.proc_translated" ]; then
+  printf '%s\\n' "\${PICKSCRIBE_TEST_PROC_TRANSLATED:-0}"
+  exit 0
+fi
+exit 64
 `,
   );
 }
@@ -82,7 +101,7 @@ while [ "$#" -gt 0 ]; do
       case "$2" in *Authorization*) auth_header=1 ;; esac
       shift 2
       ;;
-    -K)
+    -K|--proto|--proto-redir)
       shift 2
       ;;
     -*)
@@ -119,6 +138,7 @@ function runInstaller(root, fixture, extraEnv = {}) {
   mkdirSync(fakebin, { recursive: true });
   writeFakeCurl(fakebin);
   writeFakeUname(fakebin);
+  writeFakeSysctl(fakebin);
 
   const env = {
     ...process.env,
@@ -145,6 +165,7 @@ function runInstallerFailure(root, fixture, extraEnv = {}) {
   mkdirSync(fakebin, { recursive: true });
   writeFakeCurl(fakebin);
   writeFakeUname(fakebin);
+  writeFakeSysctl(fakebin);
 
   const env = {
     ...process.env,
@@ -213,11 +234,17 @@ test("macOS install extracts the app and writes an argument-forwarding wrapper",
   assert.equal(readFileSync(join(home, "wrapper-args"), "utf8"), "--toggle\n");
   assert.match(output, /PickScribe v9\.9\.9 installed to .*\/Applications\/PickScribe\.app/);
 
+  const firstBinary = readFileSync(binary, "utf8");
+  writeMacBundleFixture(fixture, "replacement bundle");
   runInstaller(root, fixture, {
     PICKSCRIBE_TEST_OS: "Darwin",
     PICKSCRIBE_TEST_ARCH: "arm64",
   });
+  const replacementBinary = readFileSync(binary, "utf8");
   assert.equal(existsSync(binary), true);
+  assert.match(firstBinary, /first bundle/);
+  assert.match(replacementBinary, /replacement bundle/);
+  assert.notEqual(replacementBinary, firstBinary);
 });
 
 test("macOS Intel install fails with an Apple silicon-only message", (root) => {
@@ -225,10 +252,41 @@ test("macOS Intel install fails with an Apple silicon-only message", (root) => {
   const result = runInstallerFailure(root, fixture, {
     PICKSCRIBE_TEST_OS: "Darwin",
     PICKSCRIBE_TEST_ARCH: "x86_64",
+    PICKSCRIBE_TEST_PROC_TRANSLATED: "0",
   });
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /currently ships Apple silicon \(aarch64\) only/);
+});
+
+test("macOS Rosetta install selects the Apple silicon bundle", (root) => {
+  const fixture = writeFixture(root);
+  runInstaller(root, fixture, {
+    PICKSCRIBE_TEST_OS: "Darwin",
+    PICKSCRIBE_TEST_ARCH: "x86_64",
+    PICKSCRIBE_TEST_PROC_TRANSLATED: "1",
+  });
+
+  assert.equal(
+    existsSync(join(root, "home", "Applications", "PickScribe.app", "Contents", "MacOS", "pickscribe-app")),
+    true,
+  );
+});
+
+test("macOS wrapper handles spaces and single quotes in HOME", (root) => {
+  const fixture = writeFixture(root);
+  const home = join(root, "home with a space's quote");
+  mkdirSync(home, { recursive: true });
+  runInstaller(root, fixture, {
+    HOME: home,
+    XDG_DATA_HOME: join(home, ".local", "share"),
+    PICKSCRIBE_TEST_OS: "Darwin",
+    PICKSCRIBE_TEST_ARCH: "arm64",
+  });
+
+  const command = join(home, ".local", "bin", "pickscribe-app");
+  execFileSync(command, ["argument with space", "quote's intact"], { env: { ...process.env, HOME: home } });
+  assert.equal(readFileSync(join(home, "wrapper-args"), "utf8"), "argument with space\nquote's intact\n");
 });
 
 test("AppImage upgrade replaces old symlink command without overwriting the AppImage", (root) => {

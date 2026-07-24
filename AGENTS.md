@@ -33,6 +33,8 @@ Repo-local guide for agents working in PickScribe — local dictation for Linux
   not pin fake-only behavior.
 - Any spawned recording or capture child must have an owner with `Drop` cleanup
   so app exit cannot orphan it.
+- Installer replacements must verify destination identity, then use staging,
+  backup, and failure restoration before removing the previous install.
 
 ## Releasing
 

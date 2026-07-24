@@ -28,9 +28,25 @@ preflight() {
     downloader="curl"
   elif command -v wget >/dev/null 2>&1; then
     downloader="wget"
+    wget_https_only=""
+    if wget --help 2>&1 | grep -q -- '--https-only'; then
+      wget_https_only="--https-only"
+    fi
   else
     die "curl or wget is required"
   fi
+}
+
+validate_download_url() {
+  checked_url=$1
+
+  case "$checked_url" in
+    https://github.com/*|https://objects.githubusercontent.com/*|https://release-assets.githubusercontent.com/*)
+      ;;
+    *)
+      die "release asset URL has an unsupported host: $checked_url"
+      ;;
+  esac
 }
 
 fetch_stdout() {
@@ -48,9 +64,9 @@ fetch_stdout() {
 
   if [ -z "${GITHUB_TOKEN:-}" ] || [ "$can_send_github_token" -ne 1 ]; then
     if [ "$downloader" = "curl" ]; then
-      curl -fsSL -H "$accept" "$fetch_url"
+      curl -fsSL --proto '=https' --proto-redir '=https' -H "$accept" "$fetch_url"
     else
-      wget -qO- --header="$accept" "$fetch_url"
+      wget -qO- ${wget_https_only:+"$wget_https_only"} --header="$accept" "$fetch_url"
     fi
     return
   fi
@@ -60,7 +76,7 @@ fetch_stdout() {
   # private temp file removed even if the fetch is interrupted.
   if [ "$downloader" = "curl" ]; then
     printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" |
-      curl -fsSL -H "$accept" -K - "$fetch_url"
+      curl -fsSL --proto '=https' --proto-redir '=https' -H "$accept" -K - "$fetch_url"
     return
   fi
 
@@ -69,7 +85,7 @@ fetch_stdout() {
   trap 'rm -f "$auth_conf"' EXIT INT TERM
   printf 'header = Authorization: Bearer %s\n' "$GITHUB_TOKEN" > "$auth_conf"
   fetch_status=0
-  wget -qO- --config="$auth_conf" --header="$accept" "$fetch_url" || fetch_status=$?
+  wget -qO- ${wget_https_only:+"$wget_https_only"} --config="$auth_conf" --header="$accept" "$fetch_url" || fetch_status=$?
   rm -f "$auth_conf"
   return "$fetch_status"
 }
@@ -78,10 +94,11 @@ download_to() {
   download_url=$1
   download_dest=$2
 
+  validate_download_url "$download_url"
   if [ "$downloader" = "curl" ]; then
-    curl -fsSL "$download_url" -o "$download_dest"
+    curl -fsSL --proto '=https' --proto-redir '=https' "$download_url" -o "$download_dest"
   else
-    wget -qO "$download_dest" "$download_url"
+    wget -qO "$download_dest" ${wget_https_only:+"$wget_https_only"} "$download_url"
   fi
 }
 
@@ -168,6 +185,7 @@ resolve_release() {
 
   asset_url=""
   for candidate_url in $download_urls; do
+    validate_download_url "$candidate_url"
     candidate_name=${candidate_url##*/}
 
     case "$platform:$candidate_name" in
@@ -366,6 +384,75 @@ path_has_dir() {
   esac
 }
 
+is_pickscribe_bundle() {
+  checked_app=$1
+  checked_plist="$checked_app/Contents/Info.plist"
+
+  [ -f "$checked_app/Contents/MacOS/$BIN_NAME" ] && return 0
+  [ -f "$checked_plist" ] || return 1
+
+  bundle_identifier=""
+  if [ -x /usr/libexec/PlistBuddy ]; then
+    bundle_identifier=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$checked_plist" 2>/dev/null || true)
+  elif command -v plutil >/dev/null 2>&1; then
+    bundle_identifier=$(plutil -extract CFBundleIdentifier raw -o - "$checked_plist" 2>/dev/null || true)
+  fi
+  [ "$bundle_identifier" = "com.pickforge.pickscribe" ]
+}
+
+validate_macos_archive() {
+  archive_members="$tmp/archive-members"
+  tar -tzf "$asset_path" > "$archive_members" || die "failed to list $asset_name"
+  [ -s "$archive_members" ] || die "$asset_name is empty"
+
+  while IFS= read -r archive_member; do
+    case "$archive_member" in
+      /*|..|../*|*/..|*/../*)
+        die "$asset_name contains an unsafe path: $archive_member"
+        ;;
+      PickScribe.app|PickScribe.app/*)
+        ;;
+      *)
+        die "$asset_name contains a file outside PickScribe.app: $archive_member"
+        ;;
+    esac
+  done < "$archive_members"
+}
+
+rollback_macos_app() {
+  [ -n "${macos_backup_path:-}" ] || return 0
+  [ -e "$macos_backup_path" ] || return 0
+
+  rollback_new_path="$tmp/failed-PickScribe.app"
+  if [ -e "$macos_app_path" ]; then
+    mv "$macos_app_path" "$rollback_new_path" || return 1
+  fi
+  if mv "$macos_backup_path" "$macos_app_path"; then
+    macos_backup_path=""
+    return 0
+  fi
+  if [ -e "$rollback_new_path" ]; then
+    mv "$rollback_new_path" "$macos_app_path" 2>/dev/null || true
+  fi
+  return 1
+}
+
+cleanup() {
+  cleanup_status=$?
+  trap - EXIT HUP INT TERM
+  preserve_tmp=0
+
+  if ! rollback_macos_app; then
+    printf '%s\n' "failed to restore the previous PickScribe app; recovery files remain in $tmp" >&2
+    cleanup_status=1
+    preserve_tmp=1
+  fi
+  if [ "$preserve_tmp" -eq 0 ] && [ -n "${tmp:-}" ]; then
+    rm -rf "$tmp"
+  fi
+  exit "$cleanup_status"
+}
+
 write_macos_wrapper() {
   command_path=$1
   bundle_binary=$2
@@ -399,14 +486,28 @@ install_macos_app() {
   mkdir -p "$install_dir" "$applications_dir" "$extracted_dir"
   [ ! -d "$command_path" ] || die "command path is a directory: $command_path"
   ensure_replaceable_command_path "$command_path"
+  validate_macos_archive
   tar -xzf "$asset_path" -C "$extracted_dir" || die "failed to extract $asset_name"
   [ -d "$extracted_app" ] || die "$asset_name does not contain $APP_NAME.app"
   [ -x "$extracted_app/Contents/MacOS/$BIN_NAME" ] ||
     die "$asset_name does not contain an executable Contents/MacOS/$BIN_NAME"
   [ ! -e "$app_path" ] || [ -d "$app_path" ] || die "install destination is not an app bundle: $app_path"
+  if [ -e "$app_path" ] && ! is_pickscribe_bundle "$app_path"; then
+    die "$app_path is not an existing PickScribe bundle; remove it manually before installing"
+  fi
 
-  rm -rf "$app_path"
-  mv "$extracted_app" "$app_path"
+  macos_app_path="$app_path"
+  macos_backup_path=""
+  if [ -e "$app_path" ]; then
+    macos_backup_path="$app_path.backup.$$"
+    [ ! -e "$macos_backup_path" ] || die "backup path already exists; remove it manually: $macos_backup_path"
+    mv "$app_path" "$macos_backup_path" || die "failed to back up the existing PickScribe app"
+  fi
+  mv "$extracted_app" "$app_path" || die "failed to install the new PickScribe app"
+  if [ -n "$macos_backup_path" ]; then
+    rm -rf "$macos_backup_path" || die "failed to remove the previous PickScribe app backup"
+    macos_backup_path=""
+  fi
   remove_replaceable_command_path "$command_path"
   write_macos_wrapper "$command_path" "$bundle_binary"
   if command -v xattr >/dev/null 2>&1; then
@@ -452,7 +553,11 @@ main() {
   detect_platform
   resolve_release
   make_tmp_dir
-  trap 'rm -rf "$tmp"' EXIT INT TERM
+  macos_backup_path=""
+  trap cleanup EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   download_asset
   if [ "$platform" = "macos" ]; then
     install_macos_app

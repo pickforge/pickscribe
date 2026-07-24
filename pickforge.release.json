@@ -9,8 +9,6 @@
     "patterns": [
       "*.AppImage",
       "*.AppImage.sig",
-      "*.AppImage.tar.gz",
-      "*.AppImage.tar.gz.sig",
       "*.app.tar.gz",
       "*.app.tar.gz.sig",
       "*.deb",
