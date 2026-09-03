@@ -1,27 +1,20 @@
-# Unreleased (v0.2.2 candidate)
+# Retired (2026-09)
 
-Working draft for the next PickScribe release. Keep this current while PRs
-land. At release time, copy and polish it into the GitHub release description,
-then reset this file.
+PickScribe is retired. There is no v0.2.2 and there will be no further releases,
+so this draft ends here instead of being reset.
 
-## User-facing changes
+Pickforge Studio now works on one product, Pickforge (https://pickforge.dev), an
+open source, local-first suite that makes coding agents effective in mobile
+projects.
 
-- None yet.
+## What this means
 
-## Internal/release changes
-
-- None yet.
+- v0.2.1, released on 2026-07-24, is the last release. Its assets stay
+  downloadable: https://github.com/pickforge/pickscribe/releases/tag/v0.2.1
+- Installed copies keep working offline. Nothing is switched off remotely.
+- No further updates, fixes or security patches.
+- The repository becomes a read-only archive.
 
 ## Validation
 
-### Tested
-
-- Nothing yet.
-
-### Not tested yet
-
-- Nothing yet.
-
-### Release blockers
-
-- None known.
+No build, no version bump, no code change. Documentation only.
