@@ -74,8 +74,10 @@ fn read_sample_window(source: &Path, start_ms: u64, end_ms: u64) -> Result<(Vec<
     let mut bytes = vec![0u8; data_len as usize];
     file.read_exact(&mut bytes)?;
     let samples = bytes
-        .chunks_exact(2)
-        .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|chunk| i16::from_le_bytes(*chunk))
         .collect();
     Ok((samples, actual_start_ms, actual_end_ms))
 }
