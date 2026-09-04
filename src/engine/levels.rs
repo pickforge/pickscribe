@@ -40,8 +40,8 @@ impl LevelMeter {
         self.cursor = len;
 
         let mut peak = 0i32;
-        for chunk in buf.chunks_exact(2) {
-            let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as i32;
+        for chunk in buf.as_chunks::<2>().0 {
+            let sample = i16::from_le_bytes(*chunk) as i32;
             peak = peak.max(sample.abs());
         }
         Some((peak as f32 / i16::MAX as f32).min(1.0))

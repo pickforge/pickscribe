@@ -1,3 +1,10 @@
+> **PickScribe is retired.** Since 2026-09 there are no further updates or releases.
+> Pickforge Studio now works on one product, [Pickforge](https://pickforge.dev), an
+> open source, local-first suite that makes coding agents effective in mobile projects.
+> The last release, [v0.2.1](https://github.com/pickforge/pickscribe/releases/tag/v0.2.1),
+> stays downloadable, and installed copies keep working offline.
+> This repository is archived and read-only.
+
 <p align="center">
   <img src="assets/branding/pickscribe-lockup-horizontal.svg" alt="PickScribe" width="560">
 </p>
