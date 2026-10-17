@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Builds PickScribe from this checkout, downloads the Whisper model once, and runs the daemon
+# as a systemd user service.
+set -euo pipefail
+
+repo=$(cd "$(dirname "$0")/.." && pwd)
+bin_dir=${PICKSCRIBE_BIN_DIR:-$HOME/.local/bin}
+unit_dir=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
+model=${XDG_DATA_HOME:-$HOME/.local/share}/pickscribe/models/ggml-large-v3-turbo.bin
+model_url=https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin
+model_sha256=1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69
+
+for tool in cargo curl sha256sum wl-copy wtype; do
+  command -v "$tool" >/dev/null || { echo "pickscribe: missing $tool" >&2; exit 1; }
+done
+if ! id -nG | tr ' ' '\n' | grep -qx input; then
+  echo "pickscribe: the Right Alt shortcut needs the input group:" >&2
+  echo "  sudo usermod -aG input \"\$USER\"  (then log out and back in)" >&2
+fi
+
+cargo build --release --locked --manifest-path "$repo/Cargo.toml"
+
+if [ ! -f "$model" ]; then
+  mkdir -p "$(dirname "$model")"
+  curl -fL --progress-bar -o "$model.part" "$model_url"
+  echo "$model_sha256  $model.part" | sha256sum --check --quiet -
+  mv "$model.part" "$model"
+fi
+
+mkdir -p "$bin_dir" "$unit_dir"
+install -m 755 "$repo/target/release/pickscribe" "$bin_dir/pickscribe"
+sed "s|@BIN@|$bin_dir/pickscribe|" "$repo/packaging/pickscribe.service" > "$unit_dir/pickscribe.service"
+systemctl --user daemon-reload
+systemctl --user enable pickscribe.service >/dev/null
+systemctl --user restart pickscribe.service
+echo "PickScribe is running. Tap Right Alt, speak, and tap it again."

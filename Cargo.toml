@@ -1,44 +1,29 @@
-[workspace]
-members = [".", "src-tauri"]
-default-members = ["."]
-resolver = "2"
+[package]
+name = "pickscribe"
+version = "0.3.0"
+edition = "2024"
+description = "PickScribe by Pickforge Studio: press Right Alt, speak, and the text lands in the focused app"
+license = "MIT"
+repository = "https://github.com/pickforge/pickscribe"
 
-[workspace.lints.clippy]
+[lints.clippy]
 cognitive_complexity = "deny"
 too_many_lines = "deny"
 
 [profile.release]
 debug = "line-tables-only"
 
-[package]
-name = "pickscribe"
-version = "0.2.1"
-edition = "2024"
-description = "PickScribe by Pickforge Studio: local Linux dictation with AI cleanup and paste"
-license = "MIT"
-repository = "https://github.com/pickforge/pickscribe"
-
-[lints]
-workspace = true
-
-[lib]
-name = "pickscribe"
-path = "src/lib.rs"
-
-[[bin]]
-name = "pickscribe-cleanup"
-path = "src/bin/pickscribe-cleanup.rs"
-
-[[bin]]
-name = "pickscribe"
-path = "src/bin/pickscribe.rs"
-
 [dependencies]
 anyhow = "1"
-clap = { version = "4", features = ["derive", "env"] }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+async-channel = "2"
+clap = { version = "4", features = ["derive"] }
+cpal = { version = "0.18", features = ["pipewire"] }
+evdev = "0.13"
+gtk4 = { version = "0.11", features = ["v4_12"] }
+gtk4-layer-shell = "0.8"
+hound = "3"
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
-tempfile = "3"
-rusqlite = { version = "0.32", features = ["bundled"] }
+toml = "1"
+whisper-rs = { version = "0.16", features = ["vulkan"] }

@@ -1,20 +1,34 @@
-# Retired (2026-09)
+# Unreleased (v0.3.0 candidate)
 
-PickScribe is retired. There is no v0.2.2 and there will be no further releases,
-so this draft ends here instead of being reset.
+Working draft for the next PickScribe release. Keep this current while PRs
+land. At release time, copy and polish it into the GitHub release description,
+then reset this file.
 
-Pickforge Studio now works on one product, Pickforge (https://pickforge.dev), an
-open source, local-first suite that makes coding agents effective in mobile
-projects.
+## User-facing changes
 
-## What this means
+- PickScribe is now a lean daemon instead of the Tauri desktop app. The dashboard, history, settings window, tray, and in-app updater are gone.
+- Tap Right Alt to dictate with Claude Haiku 5.5 cleanup, Shift + Right Alt for a raw transcript that stays on the machine, and Esc to cancel.
+- A floating capsule shows the sound waves while listening and a pulse while thinking. It never takes focus.
+- Whisper `large-v3-turbo` stays loaded on the GPU through Vulkan, and each recording picks the most likely of the configured languages.
+- Settings move to `~/.config/pickscribe/pickscribe.toml`. The old `config.toml` and history database are left untouched.
 
-- v0.2.1, released on 2026-07-24, is the last release. Its assets stay
-  downloadable: https://github.com/pickforge/pickscribe/releases/tag/v0.2.1
-- Installed copies keep working offline. Nothing is switched off remotely.
-- No further updates, fixes or security patches.
-- The repository becomes a read-only archive.
+## Internal/release changes
+
+- The release workflow, installer, and legacy shell wrappers were removed. `scripts/install` builds from source and installs a systemd user service.
 
 ## Validation
 
-No build, no version bump, no code change. Documentation only.
+### Tested
+
+- Unit tests for the shortcut tracker, settings, cleanup request and response, paste shortcut choice, resampling, and the capsule animation.
+- Transcription of the whisper.cpp JFK sample on an RX 9070 through Vulkan.
+- Daemon start, single-instance guard, capsule display on Hyprland, and cancel.
+
+### Not tested yet
+
+- Live dictation in Portuguese and English with cleanup.
+- Paste into terminals and Electron apps.
+
+### Release blockers
+
+- A new release pipeline for the daemon.

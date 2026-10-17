@@ -1,28 +1,24 @@
 # Security policy
 
-PickScribe is a local-first Linux dictation app. It records your microphone, transcribes the audio locally with `whisper.cpp`, optionally cleans the transcript with a configured LLM, and pastes the result into the focused app. It is built so your voice stays on your machine.
-
-## Privacy and security model
-
-- **Audio never leaves your machine.** Recordings are transcribed locally with the bundled `whisper.cpp` flow and are never uploaded.
-- **Cleanup sends text, never audio.** When LLM cleanup is enabled, only the transcribed text is sent to the configured LLM endpoint — DeepSeek by default — and only for cleanup.
-- **Incremental mode stays local by default.** Opt-in incremental dictation may write partial transcript JSON under the local runtime state directory while recording. Those files are removed on stop/cancel unless audio retention is enabled.
-- **Segment cleanup is a separate opt-in.** If enabled, finalized partial transcript text may be sent to the configured cleanup provider before recording stops. Audio still never leaves the machine.
-- **Local-only mode.** One switch restricts cleanup to loopback endpoints (Ollama, LM Studio, llama.cpp server…), blocks remote providers, and falls back to the raw transcript — so no text leaves the machine either.
-- **Crash reports.** Production builds send anonymous crash and error reports to Sentry by default: stack traces, error messages, OS version, app version, and loaded system libraries needed for crash symbolication. Native crash dumps include a process memory snapshot, which may contain fragments of data in memory at crash time, including recent transcript text. PickScribe strips the machine hostname and never intentionally includes transcripts, audio, API keys, file contents, or documents. Turning reports off in Settings stops new events and native crash capture when settings are saved. Turning reports on takes full effect after restart. Local-only mode disables reporting entirely, and development builds keep it off unless `PICKSCRIBE_SENTRY_DEBUG=1` is set for local verification.
-- **Update check.** Packaged builds check GitHub Releases for a newer version on startup (they fetch the release `latest.json` — version metadata only, never your transcripts, audio, or documents). This runs even in Local-only mode and with cleanup disabled.
-- **Secrets on disk.** API keys live in `~/.config/pickscribe/env`, which should be `chmod 600`. PickScribe never intentionally prints API keys; docs and diagnostics redact secrets.
+PickScribe is a Linux dictation daemon. It records your microphone while you dictate, transcribes the audio locally with Whisper, optionally cleans the transcript with Claude, and pastes the result into the focused app.
 
 ## What leaves the machine, and when
 
 | Data | Leaves the machine? | When |
 | --- | --- | --- |
-| Microphone audio | Never | Transcribed locally with `whisper.cpp` |
-| Incremental partial transcript text | Only with segment cleanup enabled and Local-only mode off | Stored temporarily in the runtime state directory while opt-in incremental mode is active; finalized partial text may be sent for cleanup only when explicitly enabled |
-| Transcribed text | Only with LLM cleanup enabled and Local-only mode off | Sent to the configured endpoint (DeepSeek by default) for cleanup |
-| Crash/error reports | Yes by default in production; never in Local-only mode or normal development builds | Sends stack traces, error messages, OS/app version, and loaded system libraries to Sentry. The machine hostname is stripped. Native crash dumps include a process memory snapshot that may contain fragments of data in memory at crash time, including recent transcript text. No transcripts, audio, API keys, file contents, or documents are intentionally included |
-| API keys, history, settings | Never | Stored locally under `~/.config/pickscribe` and `~/.local/share/pickscribe` |
-| App update check | Yes — a request to GitHub | On startup (packaged builds); fetches the release `latest.json` to compare versions. No document or audio content is sent. |
+| Microphone audio | Never | Transcribed locally. The microphone is open only while a recording runs. |
+| Transcript text | Only after Right Alt (cleanup mode) | Sent to the Anthropic Messages API for cleanup. Shift + Right Alt never sends it. |
+| API key | Only to the Anthropic API | Read from `~/.config/pickscribe/env` or `ANTHROPIC_API_KEY`. Never logged. |
+| Settings | Never | `~/.config/pickscribe/pickscribe.toml` |
+
+PickScribe keeps no history and sends no telemetry or crash reports. Logs contain errors only, never transcripts.
+
+## Local access
+
+- Right Alt is read from `/dev/input`, which needs membership in the `input` group. That group can read every keystroke, so PickScribe only reacts to Right Alt, Shift, and Esc, and stores nothing.
+- The pasted text stays on the Wayland clipboard until something else replaces it.
+- The control socket lives in `$XDG_RUNTIME_DIR`, which only your user can open.
+- Keep `~/.config/pickscribe/env` at mode `600`. Use a dedicated Anthropic key with a spend limit.
 
 ## Reporting a vulnerability
 

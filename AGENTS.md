@@ -1,9 +1,7 @@
-The root crate and `src-tauri` share a Cargo workspace, but `default-members` selects only the root. Use workspace-wide checks for changes crossing that boundary. Production app integration changes also need `cargo check -p pickscribe-app --features pickscribe-app/custom-protocol`; ordinary development checks do not exercise that feature.
+PickScribe is a single Rust binary: a daemon with a GTK4 layer-shell overlay, plus `toggle`, `cancel`, and `transcribe` subcommands. Check with `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test`. The first build compiles whisper.cpp with Vulkan, which needs `cmake`, `clang`, `glslc`, and Vulkan headers.
 
-`bun run tauri dev` launches the app; `bun run dev` is Vite alone. `.agents/skills/run` describes an isolated launch that does not touch the real session.
+Only cleanup may send text off the machine, and only the transcript. Audio stays local, Shift + Right Alt must never reach the network, and logs must never contain transcripts. Expanding that boundary requires updating the privacy sections of README.md and SECURITY.md.
 
-Only cleanup may send text off the machine. Transcription stays local, and local-only mode must remain honest. Expanding that boundary requires updating the README privacy section. Do not lower vitest or Rust coverage floors.
+Settings and keys live in `~/.config/pickscribe`, models in `~/.local/share/pickscribe/models`. The legacy Tauri app also stored `config.toml`, `env`, and `pickscribe.db` there; never rewrite or delete them. The new settings file is `pickscribe.toml`.
 
-Settings, keys and history live in `~/.config/pickscribe` and `~/.local/share/pickscribe`, shared with the CLI binaries, not `~/.pickforge`. Keep the legacy `voice-flow` and `pickscribe-gui` wrappers working for existing keyboard shortcuts.
-
-This app uses ESLint and brand CSS, not the workspace oxlint/Tailwind defaults. Release CI checks the tag against `src-tauri/tauri.conf.json`; smoke the exact draft AppImage on a desktop before human publication.
+`.agents/skills/run` describes how to launch and check the daemon without pasting into the user's session.

@@ -1,0 +1,13 @@
+[Unit]
+Description=PickScribe dictation daemon
+Documentation=https://github.com/pickforge/pickscribe
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=@BIN@
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target
