@@ -10,11 +10,12 @@ mkdir -p "$dir"
 state=$dir/state.json
 history=$dir/history.json
 dict=$dir/dict.json
+suggestions=$dir/suggestions.json
 
 if [[ ! -f $state ]]; then
   now=$(date +%s)
   cat >"$state" <<JSON
-{"state":"idle","raw":false,"version":"0.3.0","commit":"abc1234","api_key":true,"history_rev":1,"dictionary_rev":1,
+{"state":"idle","raw":false,"version":"0.3.0","commit":"abc1234","api_key":true,"history_rev":1,"dictionary_rev":1,"suggestions":2,
  "last":{"audio_ms":5400,"transcribe_ms":420,"cleanup_ms":880,"total_ms":1390,"mode":"ai"}}
 JSON
   jq -n --argjson now "$now" '[
@@ -23,6 +24,7 @@ JSON
     {id:"\($now - 4000)789", at:($now - 4000), mode:"ai", text:"The dictation daemon now writes timings for every step, so we can see where the latency comes from. Transcription is fast. Cleanup takes most of the time on long recordings, which is expected.", delivered:true}
   ]' >"$history"
   echo '[{"text":"Pickforge","heard":null},{"text":"Pickforge","heard":"Bitforge"},{"text":"Omarchy","heard":null}]' >"$dict"
+  echo '[{"id":"1-0","heard":"pix scribe","meant":"PickScribe","reason":"dictionary term","example":"o pix scribe travou de novo quando eu apertei o alt"},{"id":"1-1","heard":"hyper land","meant":"Hyprland","reason":"dictionary term","example":"o hyper land tá com o monitor piscando"}]' >"$suggestions"
 fi
 
 fail_on() {
@@ -117,6 +119,21 @@ dict)
     update '.dictionary_rev += 1'
     ;;
   *) echo "usage: dict --json|add|remove" >&2; exit 2 ;;
+  esac
+  ;;
+suggestions)
+  case ${2:-} in
+  --json) cat "$suggestions" ;;
+  accept | ignore)
+    pick=$(jq -c --arg id "${3:-}" '.[] | select(.id == $id)' "$suggestions")
+    [[ -n $pick ]] || { echo "no suggestion with id ${3:-}" >&2; exit 1; }
+    jq --arg id "$3" 'map(select(.id != $id))' "$suggestions" >"$suggestions.tmp" && mv "$suggestions.tmp" "$suggestions"
+    if [[ $2 == accept ]]; then
+      jq --argjson s "$pick" '. + [{text:$s.meant, heard:$s.heard}]' "$dict" >"$dict.tmp" && mv "$dict.tmp" "$dict"
+    fi
+    update ".suggestions = $(jq length "$suggestions") | .dictionary_rev += 1"
+    ;;
+  *) echo "usage: suggestions --json|accept|ignore" >&2; exit 2 ;;
   esac
   ;;
 *) echo "stub: unknown command ${1:-}" >&2; exit 2 ;;

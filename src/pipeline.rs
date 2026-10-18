@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
@@ -9,6 +10,7 @@ use crate::control::Command;
 use crate::dictionary::Dictionary;
 use crate::history::{self, Item, Mode};
 use crate::output;
+use crate::review;
 use crate::status::{Hub, State, Timings};
 use crate::transcribe::Transcriber;
 
@@ -56,6 +58,8 @@ pub struct Controller {
     pub level: Level,
     pub hub: Arc<Hub>,
     pub client: cleanup::Client,
+    /// Set while a dictionary review runs in the background.
+    pub reviewing: Arc<AtomicBool>,
 }
 
 impl Controller {
@@ -137,9 +141,9 @@ impl Controller {
             Dictionary::default()
         });
         let started = Instant::now();
-        let transcript = match self.transcriber.transcribe(pcm, &dictionary.terms()) {
-            Ok(text) if text.is_empty() => return Outcome::notice(NO_SPEECH),
-            Ok(text) => dictionary.apply(&text),
+        let (transcript, doubtful) = match self.transcriber.transcribe(pcm, &dictionary.terms()) {
+            Ok(heard) if heard.text.is_empty() => return Outcome::notice(NO_SPEECH),
+            Ok(heard) => (dictionary.apply(&heard.text), heard.doubtful),
             Err(err) => {
                 eprintln!("pickscribe: transcription failed: {err:#}");
                 return Outcome::notice("Transcription failed");
@@ -158,6 +162,7 @@ impl Controller {
         }
         let audio_ms = pcm.len() as u64 * 1000 / u64::from(SAMPLE_RATE);
         let mut item = Item::new(mode, text, transcript, audio_ms);
+        item.doubtful = doubtful;
         let notice = match output::deliver(&item.text) {
             Ok(()) => {
                 item.delivered = true;
@@ -180,11 +185,30 @@ impl Controller {
             cleanup_ms.unwrap_or(0),
             timings.total_ms
         );
+        let saved = self.save(&item);
+        if saved && mode == Mode::Ai {
+            self.review_later();
+        }
         Outcome {
             notice,
             timings: Some(timings),
-            saved: self.save(&item),
+            saved,
         }
+    }
+
+    /// Starts a background dictionary review when enough AI dictations piled up.
+    fn review_later(&self) {
+        if self.config.review_every == 0 || self.reviewing.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let client = self.client.clone();
+        let config = self.config.clone();
+        let hub = Arc::clone(&self.hub);
+        let reviewing = Arc::clone(&self.reviewing);
+        std::thread::spawn(move || {
+            review::run_due(&client, &config, &hub);
+            reviewing.store(false, Ordering::SeqCst);
+        });
     }
 
     /// Cleanup problems never lose the dictation: the raw transcript is pasted instead.

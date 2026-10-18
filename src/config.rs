@@ -27,6 +27,8 @@ pub struct Config {
     pub max_recording_secs: u64,
     /// How many recent dictations to keep. 0 keeps none.
     pub history_limit: usize,
+    /// Review every this many AI dictations for misheard words. 0 turns the review off.
+    pub review_every: usize,
 }
 
 impl Default for Config {
@@ -40,6 +42,7 @@ impl Default for Config {
             cleanup_instructions: String::new(),
             max_recording_secs: 300,
             history_limit: 500,
+            review_every: 10,
         }
     }
 }

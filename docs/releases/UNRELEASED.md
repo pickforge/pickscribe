@@ -13,6 +13,7 @@ then reset this file.
 - Settings move to `~/.config/pickscribe/pickscribe.toml`. The old `config.toml` and history database are left untouched.
 - A dictionary of terms and corrections (`Bitforge -> Pickforge`) in `~/.config/pickscribe/dictionary.txt`, editable with `pickscribe dict` and by AI agents through `pickscribe mcp`.
 - Recent dictations are kept in a local history, so text is not lost when no field had focus.
+- Every 10 AI dictations, PickScribe looks for misheard words and suggests corrections. You add or ignore each one in the panel; nothing changes without your yes.
 - On Omarchy, the capsule follows the theme colors, and a bar widget shows the state, history, and dictionary.
 - Cleanup effort is configurable and defaults to `low`. The HTTPS connection opens while you speak.
 

@@ -60,12 +60,17 @@ impl Client {
         api_key: &str,
         transcript: &str,
     ) -> Result<String> {
+        self.ask(api_key, &request_body(config, dictionary, transcript))
+    }
+
+    /// Sends one Messages API request and returns its text.
+    pub fn ask(&self, api_key: &str, body: &Value) -> Result<String> {
         let response = self
             .http
             .post(ENDPOINT)
             .header("x-api-key", api_key)
             .header("anthropic-version", "2023-06-01")
-            .json(&request_body(config, dictionary, transcript))
+            .json(body)
             .send()
             .context("cannot reach the Anthropic API")?;
         read_response(response)

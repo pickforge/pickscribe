@@ -9,6 +9,7 @@ mod mcp;
 mod output;
 mod overlay;
 mod pipeline;
+mod review;
 mod status;
 mod transcribe;
 
@@ -71,6 +72,16 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// List, accept, or ignore suggested dictionary corrections.
+    Suggestions {
+        #[command(subcommand)]
+        action: Option<SuggestionAction>,
+        /// Print JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Review the AI dictations not reviewed yet for misheard words, now.
+    Review,
     /// Run a dictionary server for AI agents over MCP (stdio).
     Mcp,
     /// Transcribe a 16 kHz mono WAV file and print the text.
@@ -99,6 +110,14 @@ enum HistoryAction {
     Delete { id: String },
     /// Delete every dictation.
     Clear,
+}
+
+#[derive(Subcommand)]
+enum SuggestionAction {
+    /// Add the suggestion to the dictionary as a correction.
+    Accept { id: String },
+    /// Drop the suggestion and never suggest it again.
+    Ignore { id: String },
 }
 
 #[derive(Subcommand)]
@@ -137,6 +156,8 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Watch => control::watch(false),
         Cmd::History { action, json } => history_command(action, json),
         Cmd::Dict { action, json } => dict_command(action, json),
+        Cmd::Suggestions { action, json } => suggestions_command(action, json),
+        Cmd::Review => review_now(),
         Cmd::Mcp => mcp::serve(),
         Cmd::Transcribe { path, clean } => transcribe_file(&path, clean),
         Cmd::Clean { effort, thinking } => clean_stdin(effort, thinking),
@@ -159,6 +180,7 @@ fn daemon() -> Result<()> {
         level: level.clone(),
         hub,
         client: cleanup::Client::new()?,
+        reviewing: Arc::default(),
     };
     thread::spawn(move || controller.run(receiver));
     overlay::run(events, level);
@@ -232,6 +254,48 @@ fn dict_command(action: Option<DictAction>, json: bool) -> Result<()> {
     Ok(())
 }
 
+fn suggestions_command(action: Option<SuggestionAction>, json: bool) -> Result<()> {
+    match action {
+        None if json => println!("{}", serde_json::to_string(&review::pending()?)?),
+        None => {
+            for s in review::pending()? {
+                println!("{}\t{} -> {}\t{}", s.id, s.heard, s.meant, s.example);
+            }
+        }
+        Some(SuggestionAction::Accept { id }) => {
+            review::accept(&id)?;
+            control::notify_suggestions_changed();
+        }
+        Some(SuggestionAction::Ignore { id }) => {
+            review::reject(&id)?;
+            control::notify_suggestions_changed();
+        }
+    }
+    Ok(())
+}
+
+fn review_now() -> Result<()> {
+    let config = Config::load()?;
+    let key = config::api_key()
+        .context("no ANTHROPIC_API_KEY in ~/.config/pickscribe/env or the environment")?;
+    let due = review::unreviewed(&history::load()?)?;
+    if due.is_empty() {
+        println!("No new AI dictations to review.");
+        return Ok(());
+    }
+    let fresh = review::review(&cleanup::Client::new()?, &config, &key, &due)?;
+    control::notify_suggestions_changed();
+    println!(
+        "Reviewed {} dictations, {} new suggestions.",
+        due.len(),
+        fresh.len()
+    );
+    for s in fresh {
+        println!("{}\t{} -> {}\t{}", s.id, s.heard, s.meant, s.reason);
+    }
+    Ok(())
+}
+
 fn transcribe_file(path: &Path, clean: bool) -> Result<()> {
     let config = Config::load()?;
     let dictionary = Dictionary::load()?;
@@ -240,7 +304,11 @@ fn transcribe_file(path: &Path, clean: bool) -> Result<()> {
     let transcriber = Transcriber::load(&config)?;
     eprintln!("pickscribe: model loaded in {:?}", started.elapsed());
     let started = Instant::now();
-    let text = dictionary.apply(&transcriber.transcribe(&pcm, &dictionary.terms())?);
+    let heard = transcriber.transcribe(&pcm, &dictionary.terms())?;
+    if !heard.doubtful.is_empty() {
+        eprintln!("pickscribe: unsure about {}", heard.doubtful.join(", "));
+    }
+    let text = dictionary.apply(&heard.text);
     eprintln!(
         "pickscribe: {:.1} s of audio transcribed in {:?}",
         pcm.len() as f32 / audio::SAMPLE_RATE as f32,

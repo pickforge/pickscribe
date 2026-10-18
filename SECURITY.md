@@ -9,6 +9,7 @@ PickScribe is a Linux dictation daemon. It records your microphone while you dic
 | Microphone audio | Never | Transcribed locally. The microphone is open only while a recording runs. |
 | Transcript text | Only after Right Alt (cleanup mode) | Sent to the Anthropic Messages API for cleanup. Shift + Right Alt never sends it. |
 | Dictionary | Only after Right Alt (cleanup mode) | Its terms and corrections go with the transcript, to guide the cleanup. |
+| AI dictations, again | Every `review_every` AI dictations | Sent once more, with the words Whisper was unsure about, to look for misheard words. Raw dictations never are. Set `review_every = 0` to stop it. |
 | History | Never | The last `history_limit` dictations, in `~/.local/share/pickscribe/history.jsonl` with mode 600. |
 | API key | Only to the Anthropic API | Read from `~/.config/pickscribe/env` or `ANTHROPIC_API_KEY`. Never logged. |
 | Settings | Never | `~/.config/pickscribe/pickscribe.toml` |

@@ -9,7 +9,7 @@
 #   scripts/omarchy-lab down            stop everything and delete the lab
 #
 # The lab copies ~/.config/omarchy and the current theme into its own HOME, so plugin edits
-# must be copied in again (scripts/omarchy-lab sync DIR ID) to show up.
+# must be copied in again with `scripts/omarchy-lab sync DIR ID`, which restarts the lab shell.
 set -euo pipefail
 
 lab="${XDG_RUNTIME_DIR:?}/omarchy-lab"
@@ -57,15 +57,36 @@ up() {
   for _ in $(seq 50); do [ -s "$lab/bus" ] && break; sleep 0.1; done
   sed -i 's/[[:space:]]*$//' "$lab/bus"
 
-  lab_env setsid quickshell -n -p "$shell_path" >"$lab/shell.log" 2>&1 &
-  echo $! > "$lab/shell.pid"
-  sleep 3
+  start_shell
   echo "lab up on $(cat "$lab/display"); shell log: $lab/shell.log"
 }
 
+# The lab shell, found by its HOME, since `$!` may name a wrapper rather than quickshell.
+lab_shell_pids() {
+  local pid
+  for pid in $(pgrep -f "quickshell -n -p $shell_path"); do
+    tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null | grep -qx "HOME=$home" && echo "$pid"
+  done
+  return 0
+}
+
+stop_shell() {
+  local pids
+  pids=$(lab_shell_pids)
+  [ -n "$pids" ] && kill $pids 2>/dev/null
+  for _ in $(seq 30); do [ -z "$(lab_shell_pids)" ] && return 0; sleep 0.1; done
+}
+
+start_shell() {
+  lab_env setsid quickshell -n -p "$shell_path" >"$lab/shell.log" 2>&1 &
+  echo $! > "$lab/shell.pid"
+  sleep 3
+}
+
 down() {
+  stop_shell
   # Each part runs in its own session, so killing the group also stops its children.
-  for name in shell dbus sway; do
+  for name in dbus sway; do
     [ -f "$lab/$name.pid" ] && kill -- "-$(cat "$lab/$name.pid")" 2>/dev/null || true
   done
   # Shell helpers that outlive their group still hold the lab HOME open.
@@ -84,6 +105,9 @@ case "${1:-}" in
     src="${2:?usage: $0 sync DIR ID}"; id="${3:?usage: $0 sync DIR ID}"
     rm -rf "$home/.config/omarchy/plugins/$id"
     cp -a "$src" "$home/.config/omarchy/plugins/$id"
+    # Hot reload can leave the old plugin instance answering IPC, so restart the lab shell.
+    stop_shell
+    start_shell
     ;;
   *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

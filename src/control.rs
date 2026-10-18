@@ -14,6 +14,7 @@ use crate::status::Hub;
 const WATCH: &str = "watch";
 const HISTORY_CHANGED: &str = "history-changed";
 const DICTIONARY_CHANGED: &str = "dictionary-changed";
+const SUGGESTIONS_CHANGED: &str = "suggestions-changed";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
@@ -75,6 +76,10 @@ pub fn notify_dictionary_changed() {
     notify(DICTIONARY_CHANGED);
 }
 
+pub fn notify_suggestions_changed() {
+    notify(SUGGESTIONS_CHANGED);
+}
+
 fn notify(line: &str) {
     if let Ok(mut stream) = connect() {
         let _ = writeln!(stream, "{line}");
@@ -119,6 +124,7 @@ pub fn listen(commands: Sender<Command>, hub: Arc<Hub>) -> Result<()> {
                 WATCH => hub.watch(stream),
                 HISTORY_CHANGED => hub.history_changed(),
                 DICTIONARY_CHANGED => hub.dictionary_changed(),
+                SUGGESTIONS_CHANGED => hub.suggestions_changed(),
                 other => {
                     if let Some(command) = Command::parse(other)
                         && commands.send(command).is_err()

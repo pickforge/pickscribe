@@ -70,6 +70,9 @@ cleanup_thinking = false
 # Recent dictations to keep. 0 keeps none.
 history_limit = 500
 
+# Look for misheard words after this many AI dictations. 0 turns it off.
+review_every = 10
+
 whisper_model = "/home/you/.local/share/pickscribe/models/ggml-large-v3-turbo.bin"
 max_recording_secs = 300
 ```
@@ -95,6 +98,8 @@ codex mcp add pickscribe -- ~/.local/bin/pickscribe mcp
 
 The server asks agents to check with you when a word in your message looks misheard, and to record the correction only after you confirm it.
 
+PickScribe also looks for misheard words on its own. After every 10 AI dictations, it sends them to Claude with the words Whisper was unsure about, and asks which ones look like a misheard name or term. Each finding becomes a notification. Clicking it opens the Omarchy panel, where you add it to the dictionary or ignore it. Nothing changes until you add it, and ignored suggestions never come back. Raw dictations are never reviewed. Without Omarchy, use `pickscribe suggestions`, then `pickscribe suggestions accept ID` or `ignore ID`. `pickscribe review` runs a review now.
+
 ## History
 
 PickScribe keeps your recent dictations, so text is not lost when no text field had focus. `pickscribe history` lists them, and `pickscribe history copy ID` puts one back on the clipboard. `pickscribe history delete ID` and `pickscribe history clear` remove them.
@@ -116,7 +121,7 @@ pickscribe watch                   # the same, live, one line per change
 
 ## Privacy
 
-Audio never leaves your machine. With Right Alt, the transcript text and your dictionary go to the Anthropic API for cleanup. With Shift + Right Alt, nothing leaves your machine. Recent dictations stay in `~/.local/share/pickscribe/history.jsonl`, readable only by you. Set `history_limit = 0` to keep none. See [SECURITY.md](SECURITY.md).
+Audio never leaves your machine. With Right Alt, the transcript text and your dictionary go to the Anthropic API for cleanup, and again later for the misheard word review. With Shift + Right Alt, nothing leaves your machine. Recent dictations stay in `~/.local/share/pickscribe/history.jsonl`, readable only by you. Set `history_limit = 0` to keep none. See [SECURITY.md](SECURITY.md).
 
 ## Development
 

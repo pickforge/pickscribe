@@ -152,6 +152,18 @@ impl Dictionary {
     }
 }
 
+/// True when `word` appears in `text` as a whole word, ignoring case.
+pub fn contains_word(text: &str, word: &str) -> bool {
+    find_word(text, word).is_some()
+}
+
+/// The char index where `word` first appears in `text` as a whole word, ignoring case.
+pub fn find_word(text: &str, word: &str) -> Option<usize> {
+    let chars: Vec<char> = text.chars().collect();
+    let needle: Vec<char> = word.chars().collect();
+    (0..chars.len()).find(|&at| word_at(&chars, at, &needle))
+}
+
 fn replace_word(text: &str, heard: &str, meant: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let needle: Vec<char> = heard.chars().collect();
@@ -220,6 +232,12 @@ mod tests {
             dictionary.apply("O bitforge e o Pick Check; bitforged fica."),
             "O Pickforge e o PickCheck; bitforged fica."
         );
+    }
+
+    #[test]
+    fn contains_word_matches_whole_words_only() {
+        assert!(contains_word("O Bitforge caiu", "bitforge"));
+        assert!(!contains_word("bitforged", "bitforge"));
     }
 
     #[test]

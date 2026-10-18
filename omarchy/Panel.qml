@@ -43,9 +43,11 @@ Panel {
   readonly property var last: snapshot && snapshot.last ? snapshot.last : null
   property var historyRev: undefined
   property var dictionaryRev: undefined
+  property var suggestionCount: undefined
 
   property var history: []
   property var dictionary: []
+  property var suggestions: []
   property string devloopText: ""
   property bool devloopFailed: false
 
@@ -88,6 +90,18 @@ Panel {
       dictionaryRev = value.dictionary_rev
       dictReader.load()
     }
+    if (value.suggestions !== suggestionCount) {
+      suggestionCount = value.suggestions
+      suggestionReader.load()
+    }
+  }
+
+  // Accepting adds the correction to the dictionary; ignoring means it is never suggested again.
+  function answerSuggestion(suggestion, accept) {
+    runAction(["suggestions", accept ? "accept" : "ignore", String(suggestion.id)], function() {
+      suggestionReader.load()
+      dictReader.load()
+    })
   }
 
   function parseList(text, what) {
@@ -239,7 +253,7 @@ Panel {
     function state(): string {
       return JSON.stringify({
         state: root.daemonState, opened: root.opened, executable: root.executable,
-        history: root.history.length, dictionary: root.dictionary.length,
+        history: root.history.length, dictionary: root.dictionary.length, suggestions: root.suggestions.length,
         error: root.errorText, devloop: root.devloopText
       })
     }
@@ -292,6 +306,13 @@ Panel {
     id: dictReader
     args: root.command(root.executable, ["dict", "--json"])
     onLoaded: function(text) { root.dictionary = root.parseList(text, "dictionary") }
+    onFailed: function(message) { if (root.daemonUp) root.showError(message) }
+  }
+
+  JsonReader {
+    id: suggestionReader
+    args: root.command(root.executable, ["suggestions", "--json"])
+    onLoaded: function(text) { root.suggestions = root.parseList(text, "suggestions") }
     onFailed: function(message) { if (root.daemonUp) root.showError(message) }
   }
 
@@ -528,6 +549,33 @@ Panel {
                 value: !root.last ? "" : (root.last.mode === "raw" && !(root.last.cleanup_ms > 0) ? "-" : root.formatMs(root.last.cleanup_ms))
               }
               TimingCell { label: "Total"; value: root.last ? root.formatMs(root.last.total_ms) : ""; strong: true }
+            }
+          }
+
+          // ---------- Suggestions ----------
+          PanelSeparator {
+            visible: root.suggestions.length > 0
+            foreground: root.foreground
+          }
+
+          Column {
+            visible: root.suggestions.length > 0
+            width: parent.width
+            spacing: Style.space(8)
+
+            PanelSectionHeader {
+              text: "DID YOU MEAN"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
+
+            Repeater {
+              model: root.suggestions
+              SuggestionRow {
+                required property var modelData
+                width: parent.width
+                suggestion: modelData
+              }
             }
           }
 
@@ -914,6 +962,66 @@ Panel {
       opacity: rowMouse.containsMouse || hovering ? 1 : 0.6
       onHovered: function(isHovered) { hovering = isHovered }
       onClicked: root.deleteEntry(row.entry)
+    }
+  }
+
+  component SuggestionRow: Item {
+    id: suggestionRow
+    property var suggestion: ({})
+    implicitHeight: suggestionText.implicitHeight + Style.space(4)
+
+    Column {
+      id: suggestionText
+      anchors.left: parent.left
+      anchors.right: suggestionButtons.left
+      anchors.rightMargin: Style.spacing.sm
+      anchors.verticalCenter: parent.verticalCenter
+      spacing: Style.space(2)
+
+      Text {
+        width: parent.width
+        textFormat: Text.PlainText
+        text: String(suggestionRow.suggestion.heard || "") + " → " + String(suggestionRow.suggestion.meant || "")
+        elide: Text.ElideRight
+        color: root.foreground
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.body
+      }
+
+      Text {
+        width: parent.width
+        textFormat: Text.PlainText
+        text: String(suggestionRow.suggestion.example || "")
+        wrapMode: Text.WordWrap
+        maximumLineCount: 2
+        elide: Text.ElideRight
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.bodySmall
+      }
+    }
+
+    Row {
+      id: suggestionButtons
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      spacing: Style.spacing.sm
+
+      Button {
+        bordered: true
+        text: "Add"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        onClicked: root.answerSuggestion(suggestionRow.suggestion, true)
+      }
+
+      Button {
+        bordered: true
+        text: "Ignore"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        onClicked: root.answerSuggestion(suggestionRow.suggestion, false)
+      }
     }
   }
 

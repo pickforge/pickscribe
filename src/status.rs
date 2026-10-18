@@ -40,6 +40,8 @@ struct Snapshot {
     api_key: bool,
     history_rev: u64,
     dictionary_rev: u64,
+    /// Dictionary suggestions waiting for the user.
+    suggestions: usize,
     last: Option<Timings>,
 }
 
@@ -64,6 +66,7 @@ impl Default for Hub {
                     api_key: false,
                     history_rev: 0,
                     dictionary_rev: 0,
+                    suggestions: crate::review::pending().map_or(0, |p| p.len()),
                     last: None,
                 },
                 watchers: Vec::new(),
@@ -98,6 +101,15 @@ impl Hub {
 
     pub fn dictionary_changed(&self) {
         self.update(|snapshot| snapshot.dictionary_rev += 1);
+    }
+
+    /// Accepting a suggestion also changes the dictionary.
+    pub fn suggestions_changed(&self) {
+        let count = crate::review::pending().map_or(0, |p| p.len());
+        self.update(|snapshot| {
+            snapshot.suggestions = count;
+            snapshot.dictionary_rev += 1;
+        });
     }
 
     /// Sends the current snapshot, then every later one, to `stream`.

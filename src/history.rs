@@ -23,6 +23,9 @@ pub struct Item {
     /// False when pasting failed, so the text only reached the clipboard.
     pub delivered: bool,
     pub audio_ms: u64,
+    /// Words Whisper was unsure about.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub doubtful: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,6 +48,7 @@ impl Item {
             transcript,
             delivered: false,
             audio_ms,
+            doubtful: Vec::new(),
         }
     }
 }
