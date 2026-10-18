@@ -1,10 +1,19 @@
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::thread;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+
+use crate::status::Hub;
+
+/// Socket lines that are not commands for the recorder.
+const WATCH: &str = "watch";
+const HISTORY_CHANGED: &str = "history-changed";
+const DICTIONARY_CHANGED: &str = "dictionary-changed";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
@@ -40,22 +49,57 @@ fn socket_path() -> Result<PathBuf> {
     Ok(PathBuf::from(runtime).join("pickscribe.sock"))
 }
 
-/// Sends one command to the running daemon.
-pub fn send(command: Command) -> Result<()> {
+fn connect() -> Result<UnixStream> {
     let path = socket_path()?;
-    let mut stream = UnixStream::connect(&path).with_context(|| {
+    UnixStream::connect(&path).with_context(|| {
         format!(
             "PickScribe is not running (no socket at {})",
             path.display()
         )
-    })?;
-    writeln!(stream, "{}", command.as_line())?;
+    })
+}
+
+/// Sends one command to the running daemon.
+pub fn send(command: Command) -> Result<()> {
+    writeln!(connect()?, "{}", command.as_line())?;
+    Ok(())
+}
+
+/// Tells a running daemon that a file changed, so watchers reload it. Does nothing when the
+/// daemon is not running.
+pub fn notify_history_changed() {
+    notify(HISTORY_CHANGED);
+}
+
+pub fn notify_dictionary_changed() {
+    notify(DICTIONARY_CHANGED);
+}
+
+fn notify(line: &str) {
+    if let Ok(mut stream) = connect() {
+        let _ = writeln!(stream, "{line}");
+    }
+}
+
+/// Prints the daemon's status snapshots as JSON lines until it stops, or only the current
+/// one with `once`.
+pub fn watch(once: bool) -> Result<()> {
+    let mut stream = connect()?;
+    writeln!(stream, "{WATCH}")?;
+    let mut stdout = std::io::stdout().lock();
+    for line in BufReader::new(stream).lines() {
+        writeln!(stdout, "{}", line?)?;
+        stdout.flush()?;
+        if once {
+            break;
+        }
+    }
     Ok(())
 }
 
 /// Binds the control socket and forwards each command it receives. Fails when another
 /// daemon already owns the socket.
-pub fn listen(commands: Sender<Command>) -> Result<()> {
+pub fn listen(commands: Sender<Command>, hub: Arc<Hub>) -> Result<()> {
     let path = socket_path()?;
     if UnixStream::connect(&path).is_ok() {
         bail!("PickScribe is already running");
@@ -65,12 +109,23 @@ pub fn listen(commands: Sender<Command>) -> Result<()> {
         UnixListener::bind(&path).with_context(|| format!("cannot bind {}", path.display()))?;
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
+            // A client that never finishes its line must not block the others.
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
             let mut line = String::new();
-            if BufReader::new(stream).read_line(&mut line).is_ok()
-                && let Some(command) = Command::parse(&line)
-                && commands.send(command).is_err()
-            {
-                return;
+            if BufReader::new(&stream).read_line(&mut line).is_err() {
+                continue;
+            }
+            match line.trim() {
+                WATCH => hub.watch(stream),
+                HISTORY_CHANGED => hub.history_changed(),
+                DICTIONARY_CHANGED => hub.dictionary_changed(),
+                other => {
+                    if let Some(command) = Command::parse(other)
+                        && commands.send(command).is_err()
+                    {
+                        return;
+                    }
+                }
             }
         }
     });

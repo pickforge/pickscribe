@@ -9,7 +9,6 @@ use crate::config::Config;
 pub struct Transcriber {
     context: WhisperContext,
     languages: Vec<String>,
-    prompt: String,
     threads: usize,
 }
 
@@ -36,13 +35,12 @@ impl Transcriber {
         Ok(Self {
             context,
             languages: config.languages.clone(),
-            prompt: vocabulary_prompt(&config.vocabulary),
             threads,
         })
     }
 
-    /// Transcribes 16 kHz mono audio.
-    pub fn transcribe(&self, pcm: &[f32]) -> Result<String> {
+    /// Transcribes 16 kHz mono audio, spelling the glossary terms as given.
+    pub fn transcribe(&self, pcm: &[f32], glossary: &[&str]) -> Result<String> {
         let mut state = self.context.create_state()?;
         let language = self.pick_language(&mut state, pcm)?;
         let mut params = FullParams::new(SamplingStrategy::BeamSearch {
@@ -50,8 +48,9 @@ impl Transcriber {
             patience: -1.0,
         });
         params.set_language(Some(language));
-        if !self.prompt.is_empty() {
-            params.set_initial_prompt(&self.prompt);
+        let prompt = vocabulary_prompt(glossary);
+        if !prompt.is_empty() {
+            params.set_initial_prompt(&prompt);
         }
         params.set_n_threads(self.threads as i32);
         params.set_no_context(true);
@@ -95,7 +94,7 @@ fn best_language(languages: &[String], score: impl Fn(&str) -> f32) -> &str {
 }
 
 /// Whisper copies the spelling it sees in the initial prompt.
-fn vocabulary_prompt(vocabulary: &[String]) -> String {
+fn vocabulary_prompt(vocabulary: &[&str]) -> String {
     if vocabulary.is_empty() {
         return String::new();
     }
@@ -122,7 +121,7 @@ mod tests {
     fn vocabulary_becomes_a_glossary_prompt() {
         assert_eq!(vocabulary_prompt(&[]), "");
         assert_eq!(
-            vocabulary_prompt(&["Pickforge".into(), "Prova Clara".into()]),
+            vocabulary_prompt(&["Pickforge", "Prova Clara"]),
             "Glossary: Pickforge, Prova Clara."
         );
     }

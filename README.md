@@ -10,11 +10,13 @@ A small capsule floats at the bottom of the screen while you dictate. It shows t
 
 | Shortcut | What it does |
 | --- | --- |
-| Right Alt | Start or stop dictation. The text goes through AI cleanup. Ember bars. |
-| Shift + Right Alt | Start or stop dictation. The raw transcript is pasted and never leaves your machine. White bars. |
+| Right Alt | Start or stop dictation. The text goes through AI cleanup. Accent-colored bars. |
+| Shift + Right Alt | Start or stop dictation. The raw transcript is pasted and never leaves your machine. Text-colored bars. |
 | Esc | Discard the current recording. |
 
 Right Alt only counts when you tap it alone, so AltGr characters and Alt shortcuts keep working.
+
+On Omarchy the capsule takes its colors from the current theme. Elsewhere it uses the Pickforge colors.
 
 ## Requirements
 
@@ -57,18 +59,45 @@ Settings live in `~/.config/pickscribe/pickscribe.toml`. Every setting is option
 # Languages you speak. PickScribe picks the most likely one for each recording.
 languages = ["pt", "en"]
 
-# Names and terms to spell exactly. Both Whisper and the cleanup use this list.
-vocabulary = ["Pickforge", "PickScribe"]
-
 # Extra cleanup rules, added to the built-in ones.
 cleanup_instructions = "Write numbers as digits."
 
 cleanup_model = "claude-haiku-5-5"
+# low, medium, high, xhigh, or max. xhigh and max need cleanup_thinking = true.
+cleanup_effort = "low"
+cleanup_thinking = false
+
+# Recent dictations to keep. 0 keeps none.
+history_limit = 500
+
 whisper_model = "/home/you/.local/share/pickscribe/models/ggml-large-v3-turbo.bin"
 max_recording_secs = 300
 ```
 
 Restart the service after you change settings: `systemctl --user restart pickscribe`.
+
+## Dictionary
+
+`~/.config/pickscribe/dictionary.txt` holds names and terms to spell exactly, one per line. A line like `Bitforge -> Pickforge` is a correction: Whisper heard the left side, you meant the right side. PickScribe gives the terms to Whisper, replaces each correction in the text, and tells the cleanup about both. Changes apply to the next dictation.
+
+```bash
+pickscribe dict add Pickforge
+pickscribe dict add Pickforge --heard Bitforge
+pickscribe dict remove Pickforge --heard Bitforge
+```
+
+AI coding agents can keep the dictionary for you. `pickscribe mcp` is an MCP server with tools to list, add, and remove entries. Register it once:
+
+```bash
+claude mcp add --scope user pickscribe -- ~/.local/bin/pickscribe mcp
+codex mcp add pickscribe -- ~/.local/bin/pickscribe mcp
+```
+
+The server asks agents to check with you when a word in your message looks misheard, and to record the correction only after you confirm it.
+
+## History
+
+PickScribe keeps your recent dictations, so text is not lost when no text field had focus. `pickscribe history` lists them, and `pickscribe history copy ID` puts one back on the clipboard. `pickscribe history delete ID` and `pickscribe history clear` remove them.
 
 ## Commands
 
@@ -78,13 +107,16 @@ pickscribe toggle [--raw]          # same as tapping Right Alt (or Shift + Right
 pickscribe cancel                  # same as Esc
 pickscribe transcribe file.wav     # transcribe a 16 kHz mono WAV and print the text
 pickscribe transcribe --clean f.wav  # same, with AI cleanup
+pickscribe clean [--effort low] < t.txt  # clean a transcript from stdin
+pickscribe status                  # the daemon state as one JSON line
+pickscribe watch                   # the same, live, one line per change
 ```
 
 `toggle` and `cancel` let you bind other keys in your compositor. Logs go to the journal: `journalctl --user -u pickscribe`.
 
 ## Privacy
 
-Audio never leaves your machine. With Right Alt, the transcript text goes to the Anthropic API for cleanup. With Shift + Right Alt, nothing leaves your machine. PickScribe keeps no history. The pasted text stays on the clipboard, so you can paste it again. See [SECURITY.md](SECURITY.md).
+Audio never leaves your machine. With Right Alt, the transcript text and your dictionary go to the Anthropic API for cleanup. With Shift + Right Alt, nothing leaves your machine. Recent dictations stay in `~/.local/share/pickscribe/history.jsonl`, readable only by you. Set `history_limit = 0` to keep none. See [SECURITY.md](SECURITY.md).
 
 ## Development
 

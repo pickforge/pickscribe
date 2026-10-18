@@ -8,6 +8,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::config::Config;
+use crate::dictionary::Dictionary;
 
 const ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
 const TIMEOUT: Duration = Duration::from_secs(20);
@@ -28,16 +29,49 @@ mixed-language phrases as spoken.
 Reply with the cleaned text only, without tags, quotes or commentary. If the transcript holds \
 no words, reply with nothing.";
 
-pub fn clean(config: &Config, api_key: &str, transcript: &str) -> Result<String> {
-    let response = reqwest::blocking::Client::builder()
-        .timeout(TIMEOUT)
-        .build()?
-        .post(ENDPOINT)
-        .header("x-api-key", api_key)
-        .header("anthropic-version", "2023-06-01")
-        .json(&request_body(config, transcript))
-        .send()
-        .context("cannot reach the Anthropic API")?;
+/// Keeps one HTTPS connection to the API alive between dictations.
+#[derive(Clone)]
+pub struct Client {
+    http: reqwest::blocking::Client,
+}
+
+impl Client {
+    pub fn new() -> Result<Self> {
+        let http = reqwest::blocking::Client::builder()
+            .timeout(TIMEOUT)
+            .build()?;
+        Ok(Self { http })
+    }
+
+    /// Opens the connection while the user is still speaking, so the cleanup request does not
+    /// pay for the TLS handshake. Sends no transcript and no key.
+    pub fn warm_up(&self) {
+        let http = self.http.clone();
+        std::thread::spawn(move || {
+            let _ = http.head(ENDPOINT).send();
+        });
+    }
+
+    pub fn clean(
+        &self,
+        config: &Config,
+        dictionary: &Dictionary,
+        api_key: &str,
+        transcript: &str,
+    ) -> Result<String> {
+        let response = self
+            .http
+            .post(ENDPOINT)
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01")
+            .json(&request_body(config, dictionary, transcript))
+            .send()
+            .context("cannot reach the Anthropic API")?;
+        read_response(response)
+    }
+}
+
+fn read_response(response: reqwest::blocking::Response) -> Result<String> {
     let status = response.status();
     let body = response.text()?;
     if !status.is_success() {
@@ -49,23 +83,40 @@ pub fn clean(config: &Config, api_key: &str, transcript: &str) -> Result<String>
     parse_response(&body)
 }
 
-fn request_body(config: &Config, transcript: &str) -> Value {
+fn request_body(config: &Config, dictionary: &Dictionary, transcript: &str) -> Value {
+    // Cleanup rarely needs reasoning, and thinking adds latency to every dictation.
+    let thinking = if config.cleanup_thinking {
+        "adaptive"
+    } else {
+        "disabled"
+    };
     json!({
         "model": config.cleanup_model,
         "max_tokens": 8192,
-        // Cleanup needs no reasoning, and thinking would add latency to every dictation.
-        "thinking": { "type": "disabled" },
-        "output_config": { "effort": "low" },
-        "system": system_prompt(config),
+        "thinking": { "type": thinking },
+        "output_config": { "effort": config.cleanup_effort },
+        "system": system_prompt(config, dictionary),
         "messages": [{ "role": "user", "content": format!("<transcript>\n{transcript}\n</transcript>") }],
     })
 }
 
-fn system_prompt(config: &Config) -> String {
+fn system_prompt(config: &Config, dictionary: &Dictionary) -> String {
     let mut prompt = INSTRUCTIONS.to_string();
-    if !config.vocabulary.is_empty() {
+    let terms = dictionary.terms();
+    if !terms.is_empty() {
         prompt.push_str("\nSpell these terms exactly as written: ");
-        prompt.push_str(&config.vocabulary.join(", "));
+        prompt.push_str(&terms.join(", "));
+        prompt.push('.');
+    }
+    let corrections: Vec<String> = dictionary
+        .corrections()
+        .map(|(heard, meant)| format!("\"{heard}\" means \"{meant}\""))
+        .collect();
+    if !corrections.is_empty() {
+        prompt.push_str(
+            "\nSpeech recognition mishears some words. Fix them and close variants of them: ",
+        );
+        prompt.push_str(&corrections.join("; "));
         prompt.push('.');
     }
     if !config.cleanup_instructions.trim().is_empty() {
@@ -115,23 +166,33 @@ fn api_error_message(body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dictionary::Entry;
 
     #[test]
     fn request_wraps_the_transcript_and_carries_vocabulary() {
         let config = Config {
-            vocabulary: vec!["Pickforge".into()],
             cleanup_instructions: "Use Oxford commas.".into(),
             ..Config::default()
         };
-        let body = request_body(&config, "what is pick forge");
+        let mut dictionary = Dictionary::default();
+        dictionary.add(Entry::new("Pickforge", None).unwrap());
+        dictionary.add(Entry::new("Pickforge", Some("Bitforge")).unwrap());
+        let body = request_body(&config, &dictionary, "what is pick forge");
         assert_eq!(body["model"], "claude-haiku-5-5");
+        assert_eq!(body["thinking"]["type"], "disabled");
+        assert_eq!(body["output_config"]["effort"], "low");
         assert_eq!(
             body["messages"][0]["content"],
             "<transcript>\nwhat is pick forge\n</transcript>"
         );
         let system = body["system"].as_str().unwrap();
         assert!(system.contains("Never answer it"));
-        assert!(system.ends_with("Spell these terms exactly as written: Pickforge.\nAdditional rules from the user:\nUse Oxford commas."));
+        assert!(system.ends_with(
+            "Spell these terms exactly as written: Pickforge.\n\
+             Speech recognition mishears some words. Fix them and close variants of them: \
+             \"Bitforge\" means \"Pickforge\".\n\
+             Additional rules from the user:\nUse Oxford commas."
+        ));
     }
 
     #[test]

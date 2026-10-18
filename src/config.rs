@@ -1,6 +1,9 @@
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 pub const API_KEY_VAR: &str = "ANTHROPIC_API_KEY";
@@ -14,12 +17,16 @@ pub struct Config {
     /// Languages you speak. With more than one, PickScribe detects which of them each
     /// recording uses.
     pub languages: Vec<String>,
-    /// Names and terms that speech recognition and cleanup should spell exactly.
-    pub vocabulary: Vec<String>,
     pub cleanup_model: String,
+    /// `low`, `medium`, `high`, `xhigh`, or `max`.
+    pub cleanup_effort: String,
+    /// Lets the cleanup model think before it answers. Slower, and rarely needed.
+    pub cleanup_thinking: bool,
     /// Extra cleanup rules, appended to the built-in instructions.
     pub cleanup_instructions: String,
     pub max_recording_secs: u64,
+    /// How many recent dictations to keep. 0 keeps none.
+    pub history_limit: usize,
 }
 
 impl Default for Config {
@@ -27,10 +34,12 @@ impl Default for Config {
         Self {
             whisper_model: data_dir().join("models/ggml-large-v3-turbo.bin"),
             languages: vec!["pt".into(), "en".into()],
-            vocabulary: Vec::new(),
             cleanup_model: "claude-haiku-5-5".into(),
+            cleanup_effort: "low".into(),
+            cleanup_thinking: false,
             cleanup_instructions: String::new(),
             max_recording_secs: 300,
+            history_limit: 500,
         }
     }
 }
@@ -46,9 +55,27 @@ impl Config {
     }
 
     fn parse(text: &str) -> Result<Self> {
-        Ok(toml::from_str(text)?)
+        let config: Self = toml::from_str(text)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if !EFFORTS.contains(&self.cleanup_effort.as_str()) {
+            bail!("cleanup_effort must be one of {}", EFFORTS.join(", "));
+        }
+        // The API rejects disabled thinking at the two highest levels.
+        if !self.cleanup_thinking && matches!(self.cleanup_effort.as_str(), "xhigh" | "max") {
+            bail!(
+                "cleanup_effort {} needs cleanup_thinking = true",
+                self.cleanup_effort
+            );
+        }
+        Ok(())
     }
 }
+
+pub const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
 /// Reads the cleanup key on every use, so adding it does not need a restart. The key file
 /// comes first, so a dedicated, spend-capped key wins over a general shell variable.
@@ -80,6 +107,23 @@ fn unquote(value: &str) -> &str {
         }
     }
     value
+}
+
+/// Writes the file atomically with mode 600.
+pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    let dir = path.parent().context("path has no parent")?;
+    std::fs::create_dir_all(dir)?;
+    let temp = path.with_extension("tmp");
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&temp)
+        .with_context(|| format!("cannot write {}", temp.display()))?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    std::fs::rename(&temp, path).with_context(|| format!("cannot write {}", path.display()))
 }
 
 pub fn config_dir() -> PathBuf {
@@ -115,6 +159,14 @@ mod tests {
     #[test]
     fn unknown_keys_are_rejected() {
         assert!(Config::parse("lenguages = [\"pt\"]").is_err());
+    }
+
+    #[test]
+    fn effort_must_be_known_and_fit_the_thinking_mode() {
+        assert!(Config::parse("cleanup_effort = \"fast\"").is_err());
+        assert!(Config::parse("cleanup_effort = \"max\"").is_err());
+        assert!(Config::parse("cleanup_effort = \"max\"\ncleanup_thinking = true").is_ok());
+        assert!(Config::parse("cleanup_effort = \"high\"").is_ok());
     }
 
     #[test]

@@ -24,16 +24,87 @@ const BAR_GAP: f64 = 3.0;
 const SAMPLE_EVERY_US: i64 = 33_000;
 const NOTICE_TIME: Duration = Duration::from_millis(2600);
 
-// Pickforge brand tokens: surface-1, hairline-strong, ember, and text.
-const SURFACE: (f64, f64, f64, f64) = (15.0 / 255.0, 15.0 / 255.0, 17.0 / 255.0, 0.94);
-const HAIRLINE: (f64, f64, f64, f64) = (1.0, 1.0, 1.0, 0.14);
-const EMBER: (f64, f64, f64) = (1.0, 122.0 / 255.0, 26.0 / 255.0);
-const TEXT: (f64, f64, f64) = (242.0 / 255.0, 242.0 / 255.0, 243.0 / 255.0);
+const SURFACE_ALPHA: f64 = 0.94;
+const HAIRLINE_ALPHA: f64 = 0.14;
 
-const CSS: &str = "
-window.pickscribe { background: transparent; }
-label.notice { color: #F2F2F3; font-family: 'Geist', 'Inter', sans-serif; font-size: 12px; }
-";
+type Rgb = (f64, f64, f64);
+
+/// Capsule colors. Under Omarchy they follow the current theme; elsewhere they are the
+/// Pickforge brand tokens surface-1, ember, and text.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Theme {
+    surface: Rgb,
+    /// Bars for dictation with AI cleanup.
+    accent: Rgb,
+    /// Bars for raw dictation, the hairline, and notices.
+    text: Rgb,
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Self {
+            surface: (15.0 / 255.0, 15.0 / 255.0, 17.0 / 255.0),
+            accent: (1.0, 122.0 / 255.0, 26.0 / 255.0),
+            text: (242.0 / 255.0, 242.0 / 255.0, 243.0 / 255.0),
+        }
+    }
+}
+
+impl Theme {
+    /// Read on every show, so a theme switch applies to the next dictation.
+    fn load() -> Self {
+        let path = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_default()
+            .join(".local/state/omarchy/current/theme/colors.toml");
+        std::fs::read_to_string(path)
+            .map(|text| Self::from_omarchy(&text))
+            .unwrap_or_default()
+    }
+
+    fn from_omarchy(text: &str) -> Self {
+        let fallback = Self::default();
+        let Ok(table) = text.parse::<toml::Table>() else {
+            return fallback;
+        };
+        let color = |key: &str, default: Rgb| {
+            table
+                .get(key)
+                .and_then(toml::Value::as_str)
+                .and_then(hex)
+                .unwrap_or(default)
+        };
+        Self {
+            surface: color("background", fallback.surface),
+            accent: color("accent", fallback.accent),
+            text: color("foreground", fallback.text),
+        }
+    }
+
+    fn css(&self) -> String {
+        let (r, g, b) = self.text;
+        format!(
+            "window.pickscribe {{ background: transparent; }}\n\
+             label.notice {{ color: rgb({}, {}, {}); font-family: 'Geist', 'Inter', sans-serif; font-size: 12px; }}",
+            (r * 255.0).round(),
+            (g * 255.0).round(),
+            (b * 255.0).round()
+        )
+    }
+}
+
+fn hex(value: &str) -> Option<Rgb> {
+    let digits = value.strip_prefix('#')?;
+    if digits.len() != 6 || !digits.is_ascii() {
+        return None;
+    }
+    let channel = |at: usize| u8::from_str_radix(&digits[at..at + 2], 16).ok();
+    Some((
+        f64::from(channel(0)?) / 255.0,
+        f64::from(channel(2)?) / 255.0,
+        f64::from(channel(4)?) / 255.0,
+    ))
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Mode {
@@ -45,6 +116,7 @@ enum Mode {
 
 struct View {
     mode: Mode,
+    theme: Theme,
     levels: VecDeque<f32>,
     now_us: i64,
     last_sample_us: i64,
@@ -55,6 +127,7 @@ impl Default for View {
     fn default() -> Self {
         Self {
             mode: Mode::Hidden,
+            theme: Theme::default(),
             levels: VecDeque::from(vec![0.0; BARS]),
             now_us: 0,
             last_sample_us: 0,
@@ -67,6 +140,7 @@ impl Default for View {
 struct Widgets {
     window: gtk::ApplicationWindow,
     label: gtk::Label,
+    css: gtk::CssProvider,
     view: Rc<RefCell<View>>,
 }
 
@@ -84,7 +158,7 @@ pub fn run(events: async_channel::Receiver<UiEvent>, level: Level) {
 }
 
 fn build(app: &gtk::Application, events: async_channel::Receiver<UiEvent>, level: Level) {
-    install_css();
+    let css = install_css();
     let window = gtk::ApplicationWindow::new(app);
     window.add_css_class("pickscribe");
     window.set_default_size(WIDTH, HEIGHT);
@@ -133,6 +207,7 @@ fn build(app: &gtk::Application, events: async_channel::Receiver<UiEvent>, level
     let widgets = Widgets {
         window,
         label,
+        css,
         view,
     };
     glib::spawn_future_local(async move {
@@ -142,9 +217,9 @@ fn build(app: &gtk::Application, events: async_channel::Receiver<UiEvent>, level
     });
 }
 
-fn install_css() {
+fn install_css() -> gtk::CssProvider {
     let provider = gtk::CssProvider::new();
-    provider.load_from_string(CSS);
+    provider.load_from_string(&Theme::default().css());
     if let Some(display) = gdk::Display::default() {
         gtk::style_context_add_provider_for_display(
             &display,
@@ -152,6 +227,7 @@ fn install_css() {
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
     }
+    provider
 }
 
 fn tick(view: &mut View, now_us: i64, level: &Level) {
@@ -172,6 +248,14 @@ fn bar_height(rms: f32) -> f32 {
 }
 
 fn apply(widgets: &Widgets, event: UiEvent) {
+    let was_hidden = widgets.view.borrow().mode == Mode::Hidden;
+    if was_hidden && event != UiEvent::Hidden {
+        let theme = Theme::load();
+        if theme != widgets.view.borrow().theme {
+            widgets.css.load_from_string(&theme.css());
+            widgets.view.borrow_mut().theme = theme;
+        }
+    }
     // Release the borrow before touching widgets, which may draw synchronously.
     let notice = {
         let mut view = widgets.view.borrow_mut();
@@ -218,15 +302,19 @@ fn hide_notice_later(widgets: Widgets, notice: u64) {
 }
 
 fn draw(cr: &cairo::Context, width: f64, height: f64, view: &View) {
+    let theme = view.theme;
     capsule(cr, 0.5, 0.5, width - 1.0, height - 1.0);
-    cr.set_source_rgba(SURFACE.0, SURFACE.1, SURFACE.2, SURFACE.3);
+    let (r, g, b) = theme.surface;
+    cr.set_source_rgba(r, g, b, SURFACE_ALPHA);
     let _ = cr.fill_preserve();
-    cr.set_source_rgba(HAIRLINE.0, HAIRLINE.1, HAIRLINE.2, HAIRLINE.3);
+    let (r, g, b) = theme.text;
+    cr.set_source_rgba(r, g, b, HAIRLINE_ALPHA);
     cr.set_line_width(1.0);
     let _ = cr.stroke();
+    let color = |raw: bool| if raw { theme.text } else { theme.accent };
     match view.mode {
-        Mode::Listening { raw } => bars(cr, width, height, view.levels.iter().copied(), raw),
-        Mode::Thinking { raw } => bars(cr, width, height, thinking_wave(view.now_us), raw),
+        Mode::Listening { raw } => bars(cr, width, height, view.levels.iter().copied(), color(raw)),
+        Mode::Thinking { raw } => bars(cr, width, height, thinking_wave(view.now_us), color(raw)),
         Mode::Hidden | Mode::Notice => {}
     }
 }
@@ -251,15 +339,14 @@ fn capsule(cr: &cairo::Context, x: f64, y: f64, width: f64, height: f64) {
     cr.close_path();
 }
 
-/// Ember bars mean the text will go through AI cleanup; off-white bars mean raw text.
+/// Accent bars mean the text will go through AI cleanup; text-colored bars mean raw text.
 fn bars(
     cr: &cairo::Context,
     width: f64,
     height: f64,
     levels: impl Iterator<Item = f32>,
-    raw: bool,
+    (r, g, b): Rgb,
 ) {
-    let (r, g, b) = if raw { TEXT } else { EMBER };
     cr.set_source_rgb(r, g, b);
     cr.set_line_width(BAR_WIDTH);
     cr.set_line_cap(cairo::LineCap::Round);
@@ -294,6 +381,20 @@ mod tests {
         assert_eq!(bar_height(0.0), 0.0);
         assert!(bar_height(0.01) < bar_height(0.05));
         assert_eq!(bar_height(5.0), 1.0);
+    }
+
+    #[test]
+    fn omarchy_colors_map_to_the_capsule() {
+        let theme = Theme::from_omarchy(
+            "accent = \"#7daea3\"\nbackground = \"#282828\"\nforeground = \"#d4be98\"\n",
+        );
+        assert_eq!(theme.accent, hex("#7daea3").unwrap());
+        assert_eq!(theme.surface, hex("#282828").unwrap());
+        assert_eq!(theme.text, hex("#d4be98").unwrap());
+        let partial = Theme::from_omarchy("accent = \"oops\"\nforeground = \"#ffffff\"");
+        assert_eq!(partial.accent, Theme::default().accent);
+        assert_eq!(partial.text, (1.0, 1.0, 1.0));
+        assert_eq!(Theme::from_omarchy("not toml ["), Theme::default());
     }
 
     #[test]

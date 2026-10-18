@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# An invisible Omarchy shell for checking the bar widget and panel without touching the
+# user's screen, input, session bus, or settings.
+#
+#   scripts/omarchy-lab up              start a headless sway and a sandboxed Omarchy shell
+#   scripts/omarchy-lab shot FILE.png   screenshot the headless screen
+#   scripts/omarchy-lab ipc ARGS...     call the lab shell's IPC, like omarchy-shell ARGS
+#   scripts/omarchy-lab run CMD...      run a command inside the lab (for example grim, wtype)
+#   scripts/omarchy-lab down            stop everything and delete the lab
+#
+# The lab copies ~/.config/omarchy and the current theme into its own HOME, so plugin edits
+# must be copied in again (scripts/omarchy-lab sync DIR ID) to show up.
+set -euo pipefail
+
+lab="${XDG_RUNTIME_DIR:?}/omarchy-lab"
+home="$lab/home"
+run="$lab/run"
+shell_path=/usr/share/omarchy/shell
+
+lab_env() {
+  env -i \
+    HOME="$home" PATH="$PATH" LANG="${LANG:-C.UTF-8}" USER="$USER" \
+    XDG_RUNTIME_DIR="$run" WAYLAND_DISPLAY="$(cat "$lab/display")" \
+    XDG_CURRENT_DESKTOP=Hyprland QT_QPA_PLATFORM=wayland \
+    DBUS_SESSION_BUS_ADDRESS="$(cat "$lab/bus")" OMARCHY_PATH="${OMARCHY_PATH:-/usr/share/omarchy}" \
+    "$@"
+}
+
+up() {
+  [ -e "$lab/sway.pid" ] && { echo "lab is already up; run: $0 down" >&2; exit 1; }
+  mkdir -p "$home/.config" "$home/.local/state" "$run"
+  chmod 700 "$lab" "$run"
+  cp -a "$HOME/.config/omarchy" "$home/.config/"
+  cp -a "$HOME/.local/state/omarchy" "$home/.local/state/"
+  [ -d "$HOME/.config/fontconfig" ] && cp -a "$HOME/.config/fontconfig" "$home/.config/"
+  printf 'output HEADLESS-1 resolution 1920x1080 scale 1\n' > "$lab/sway.conf"
+
+  # No input devices: the lab never sees the user's keyboard or mouse.
+  WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman \
+    XDG_RUNTIME_DIR="$run" \
+    setsid bwrap --dev-bind / / --tmpfs /dev/input \
+      env -u WAYLAND_DISPLAY -u DISPLAY -u HYPRLAND_INSTANCE_SIGNATURE -u SWAYSOCK \
+      sway --config "$lab/sway.conf" >"$lab/sway.log" 2>&1 &
+  echo $! > "$lab/sway.pid"
+  for _ in $(seq 50); do
+    socket=$(find "$run" -maxdepth 1 -name 'wayland-*' -not -name '*.lock' -printf '%f\n' | head -1)
+    [ -n "$socket" ] && break
+    sleep 0.1
+  done
+  [ -n "${socket:-}" ] || { echo "headless sway did not start; see $lab/sway.log" >&2; down; exit 1; }
+  echo "$run/$socket" > "$lab/display"
+
+  # A private session bus keeps the lab's notification, polkit, and idle services away
+  # from the real session.
+  setsid dbus-daemon --session --nofork --print-address=3 3>"$lab/bus" >/dev/null 2>&1 &
+  echo $! > "$lab/dbus.pid"
+  for _ in $(seq 50); do [ -s "$lab/bus" ] && break; sleep 0.1; done
+  sed -i 's/[[:space:]]*$//' "$lab/bus"
+
+  lab_env setsid quickshell -n -p "$shell_path" >"$lab/shell.log" 2>&1 &
+  echo $! > "$lab/shell.pid"
+  sleep 3
+  echo "lab up on $(cat "$lab/display"); shell log: $lab/shell.log"
+}
+
+down() {
+  for name in shell dbus sway; do
+    [ -f "$lab/$name.pid" ] && kill "$(cat "$lab/$name.pid")" 2>/dev/null || true
+  done
+  sleep 0.5
+  rm -rf "$lab"
+}
+
+case "${1:-}" in
+  up) up ;;
+  down) down ;;
+  shot) lab_env grim "$(realpath -m "${2:?usage: $0 shot FILE.png}")" ;;
+  ipc) shift; lab_env quickshell ipc -p "$shell_path" "$@" ;;
+  run) shift; lab_env "$@" ;;
+  sync)
+    src="${2:?usage: $0 sync DIR ID}"; id="${3:?usage: $0 sync DIR ID}"
+    rm -rf "$home/.config/omarchy/plugins/$id"
+    cp -a "$src" "$home/.config/omarchy/plugins/$id"
+    ;;
+  *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

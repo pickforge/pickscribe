@@ -6,11 +6,15 @@ then reset this file.
 
 ## User-facing changes
 
-- PickScribe is now a lean daemon instead of the Tauri desktop app. The dashboard, history, settings window, tray, and in-app updater are gone.
+- PickScribe is now a lean daemon instead of the Tauri desktop app. The dashboard, settings window, tray, and in-app updater are gone.
 - Tap Right Alt to dictate with Claude Haiku 5.5 cleanup, Shift + Right Alt for a raw transcript that stays on the machine, and Esc to cancel.
 - A floating capsule shows the sound waves while listening and a pulse while thinking. It never takes focus.
 - Whisper `large-v3-turbo` stays loaded on the GPU through Vulkan, and each recording picks the most likely of the configured languages.
 - Settings move to `~/.config/pickscribe/pickscribe.toml`. The old `config.toml` and history database are left untouched.
+- A dictionary of terms and corrections (`Bitforge -> Pickforge`) in `~/.config/pickscribe/dictionary.txt`, editable with `pickscribe dict` and by AI agents through `pickscribe mcp`.
+- Recent dictations are kept in a local history, so text is not lost when no field had focus.
+- On Omarchy, the capsule follows the theme colors, and a bar widget shows the state, history, and dictionary.
+- Cleanup effort is configurable and defaults to `low`. The HTTPS connection opens while you speak.
 
 ## Internal/release changes
 
@@ -20,7 +24,7 @@ then reset this file.
 
 ### Tested
 
-- Unit tests for the shortcut tracker, settings, cleanup request and response, paste shortcut choice, resampling, and the capsule animation.
+- Unit tests for the shortcut tracker, settings, cleanup request and response, paste shortcut choice, resampling, the capsule animation and theme, the dictionary, history, status stream, and MCP server.
 - Transcription of the whisper.cpp JFK sample on an RX 9070 through Vulkan.
 - Daemon start, single-instance guard, capsule display on Hyprland, and cancel.
 

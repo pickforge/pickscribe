@@ -29,7 +29,7 @@ pub fn deliver(text: &str) -> Result<()> {
     run("wtype", &args)
 }
 
-fn copy(text: &str) -> Result<()> {
+pub fn copy(text: &str) -> Result<()> {
     let mut child = Command::new("wl-copy")
         .stdin(Stdio::piped())
         .spawn()
