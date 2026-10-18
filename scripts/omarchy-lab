@@ -64,9 +64,12 @@ up() {
 }
 
 down() {
+  # Each part runs in its own session, so killing the group also stops its children.
   for name in shell dbus sway; do
-    [ -f "$lab/$name.pid" ] && kill "$(cat "$lab/$name.pid")" 2>/dev/null || true
+    [ -f "$lab/$name.pid" ] && kill -- "-$(cat "$lab/$name.pid")" 2>/dev/null || true
   done
+  # Shell helpers that outlive their group still hold the lab HOME open.
+  pkill -f -- "$home/" 2>/dev/null || true
   sleep 0.5
   rm -rf "$lab"
 }
