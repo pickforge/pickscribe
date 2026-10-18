@@ -33,6 +33,13 @@ mkdir -p "$bin_dir" "$unit_dir"
 install -m 755 "$target/release/pickscribe" "$bin_dir/.pickscribe.new"
 mv -f "$bin_dir/.pickscribe.new" "$bin_dir/pickscribe"
 sed "s|@BIN@|$bin_dir/pickscribe|" "$repo/packaging/pickscribe.service" > "$unit_dir/pickscribe.service"
+# On Omarchy, refresh the bar widget too. The shell reloads plugin files on its own.
+plugin_dir=${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/pickforge.pickscribe
+if [ -d "$(dirname "$plugin_dir")" ]; then
+  mkdir -p "$plugin_dir"
+  install -m 644 "$repo/omarchy/manifest.json" "$repo/omarchy/Panel.qml" "$plugin_dir/"
+fi
+
 systemctl --user daemon-reload
 systemctl --user enable pickscribe.service >/dev/null
 systemctl --user restart pickscribe.service

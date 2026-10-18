@@ -1,0 +1,123 @@
+#!/bin/bash
+# Fake pickscribe for testing the Omarchy plugin. It follows the daemon
+# protocol with canned data kept in $PICKSCRIBE_STUB_DIR.
+# Set PICKSCRIBE_STUB_CYCLE=0 to stop the automatic state changes on watch.
+# Any argument equal to "fail" makes the command fail, to test error display.
+set -euo pipefail
+
+dir=${PICKSCRIBE_STUB_DIR:-${XDG_RUNTIME_DIR:-/tmp}/pickscribe-stub}
+mkdir -p "$dir"
+state=$dir/state.json
+history=$dir/history.json
+dict=$dir/dict.json
+
+if [[ ! -f $state ]]; then
+  now=$(date +%s)
+  cat >"$state" <<JSON
+{"state":"idle","raw":false,"version":"0.3.0","commit":"abc1234","api_key":true,"history_rev":1,"dictionary_rev":1,
+ "last":{"audio_ms":5400,"transcribe_ms":420,"cleanup_ms":880,"total_ms":1390,"mode":"ai"}}
+JSON
+  jq -n --argjson now "$now" '[
+    {id:"\($now - 60)123", at:($now - 60), mode:"ai", text:"Remind me to send the invoice to Marta before Friday, and add the hours from the Pickforge sprint.", delivered:false},
+    {id:"\($now - 900)456", at:($now - 900), mode:"raw", text:"git rebase main then push the branch", delivered:true},
+    {id:"\($now - 4000)789", at:($now - 4000), mode:"ai", text:"The dictation daemon now writes timings for every step, so we can see where the latency comes from. Transcription is fast. Cleanup takes most of the time on long recordings, which is expected.", delivered:true}
+  ]' >"$history"
+  echo '[{"text":"Pickforge","heard":null},{"text":"Pickforge","heard":"Bitforge"},{"text":"Omarchy","heard":null}]' >"$dict"
+fi
+
+fail_on() {
+  for arg in "$@"; do
+    if [[ $arg == fail ]]; then
+      echo "stub: refused '$arg' on purpose" >&2
+      exit 1
+    fi
+  done
+}
+
+update() { jq "$1" "$state" >"$state.tmp" && mv "$state.tmp" "$state"; }
+bump() { update '.history_rev += 1'; }
+
+add_history() {
+  local now mode
+  now=$(date +%s)
+  mode=$(jq -r 'if .raw then "raw" else "ai" end' "$state")
+  jq --argjson now "$now" --arg mode "$mode" \
+    '[{id:"\($now)000", at:$now, mode:$mode, text:"A new stub dictation at \($now).", delivered:true}] + .' \
+    "$history" >"$history.tmp" && mv "$history.tmp" "$history"
+  update ".last = {audio_ms:3100, transcribe_ms:310, cleanup_ms:(if \"$mode\" == \"ai\" then 640 else 0 end), total_ms:960, mode:\"$mode\"}"
+  bump
+}
+
+case ${1:-} in
+watch)
+  last=""
+  tick=0
+  while true; do
+    snap=$(jq -c . "$state")
+    if [[ $snap != "$last" ]]; then
+      echo "$snap"
+      last=$snap
+    fi
+    sleep 1
+    tick=$((tick + 1))
+    if [[ ${PICKSCRIBE_STUB_CYCLE:-1} == 1 && $((tick % 4)) == 0 ]]; then
+      case $(jq -r .state "$state") in
+      idle) update '.state = "listening" | .raw = (.history_rev % 2 == 0)' ;;
+      listening) update '.state = "thinking"' ;;
+      *) update '.state = "idle"'; add_history ;;
+      esac
+    fi
+  done
+  ;;
+toggle)
+  case $(jq -r .state "$state") in
+  idle) update '.state = "listening"' ;;
+  listening) update '.state = "thinking"' ;;
+  *) update '.state = "idle"'; add_history ;;
+  esac
+  ;;
+cancel) update '.state = "idle"' ;;
+history)
+  case ${2:-} in
+  --json) cat "$history" ;;
+  copy)
+    fail_on "${3:-}"
+    jq -e -r --arg id "${3:-}" '.[] | select(.id == $id) | .text' "$history" >/dev/null ||
+      { echo "no history entry ${3:-}" >&2; exit 1; }
+    jq -r --arg id "$3" '.[] | select(.id == $id) | .text' "$history" | wl-copy 2>/dev/null || true
+    ;;
+  delete)
+    fail_on "${3:-}"
+    jq --arg id "${3:-}" 'map(select(.id != $id))' "$history" >"$history.tmp" && mv "$history.tmp" "$history"
+    bump
+    ;;
+  clear) echo '[]' >"$history"; bump ;;
+  *) echo "usage: history --json|copy|delete|clear" >&2; exit 2 ;;
+  esac
+  ;;
+dict)
+  case ${2:-} in
+  --json) cat "$dict" ;;
+  add | remove)
+    op=$2
+    text=${3:-}
+    heard=null
+    if [[ ${4:-} == --heard ]]; then heard=$(jq -n --arg h "${5:-}" '$h'); fi
+    fail_on "$text" "${5:-}"
+    [[ -n $text ]] || { echo "dict $op needs a term" >&2; exit 2; }
+    entry=$(jq -n --arg t "$text" --argjson h "$heard" '{text:$t, heard:$h}')
+    if [[ $op == add ]]; then
+      jq --argjson e "$entry" 'map(select(. != $e)) + [$e]' "$dict" >"$dict.tmp"
+    else
+      jq -e --argjson e "$entry" 'any(.[]; . == $e)' "$dict" >/dev/null ||
+        { echo "not in dictionary: $text" >&2; exit 1; }
+      jq --argjson e "$entry" 'map(select(. != $e))' "$dict" >"$dict.tmp"
+    fi
+    mv "$dict.tmp" "$dict"
+    update '.dictionary_rev += 1'
+    ;;
+  *) echo "usage: dict --json|add|remove" >&2; exit 2 ;;
+  esac
+  ;;
+*) echo "stub: unknown command ${1:-}" >&2; exit 2 ;;
+esac
