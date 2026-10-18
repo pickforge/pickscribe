@@ -16,6 +16,7 @@ then reset this file.
 - Every 10 AI dictations, PickScribe looks for misheard words and suggests corrections. You add or ignore each one in the panel; nothing changes without your yes.
 - On Omarchy, the capsule follows the theme colors, and a bar widget shows the state, history, and dictionary.
 - Cleanup effort is configurable and defaults to `low`. The HTTPS connection opens while you speak.
+- Cleanup rewrites a dictated question instead of answering it. If the model answers anyway, the raw text is pasted.
 
 ## Internal/release changes
 

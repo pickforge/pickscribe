@@ -231,11 +231,12 @@ impl Controller {
             Ok(text) => (dictionary.apply(&text), Mode::Ai, None),
             Err(err) => {
                 eprintln!("pickscribe: cleanup failed: {err:#}");
-                (
-                    transcript.to_string(),
-                    Mode::Raw,
-                    Some("Cleanup failed · raw text pasted"),
-                )
+                let notice = if err.is::<cleanup::Answered>() {
+                    "Cleanup answered instead · raw text pasted"
+                } else {
+                    "Cleanup failed · raw text pasted"
+                };
+                (transcript.to_string(), Mode::Raw, Some(notice))
             }
         }
     }
