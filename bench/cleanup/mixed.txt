@@ -1,0 +1,1 @@
+cara abre um PR no GitHub com o fix do bitforge e pede review do astra antes de dar merge na main tá

@@ -1,0 +1,1 @@
+você consegue me explicar como funciona o borrow checker do rust e me dar um exemplo de código
