@@ -68,32 +68,10 @@ impl Controller {
         let limit = Duration::from_secs(self.config.max_recording_secs);
         let mut active: Option<Recording> = None;
         loop {
-            let command = match &active {
-                // Reaching the length limit stops the recording as if the key was tapped.
-                Some(recording) => {
-                    if recording.lock.locked() {
-                        active.take();
-                        self.show(UiEvent::Notice("Session locked".into()));
-                        self.hub.finished(None, false);
-                        continue;
-                    }
-                    match commands.recv_timeout(
-                        limit
-                            .saturating_sub(recording.started.elapsed())
-                            .min(Duration::from_secs(1)),
-                    ) {
-                        Ok(command) => command,
-                        Err(RecvTimeoutError::Timeout) if recording.started.elapsed() >= limit => {
-                            Command::Toggle { raw: recording.raw }
-                        }
-                        Err(RecvTimeoutError::Timeout) => continue,
-                        Err(RecvTimeoutError::Disconnected) => return,
-                    }
-                }
-                None => match commands.recv() {
-                    Ok(command) => command,
-                    Err(_) => return,
-                },
+            let command = match self.next_command(&commands, &mut active, limit) {
+                Ok(Some(command)) => command,
+                Ok(None) => continue,
+                Err(_) => return,
             };
             match (command, active.take()) {
                 (Command::Toggle { raw }, None) => active = self.start(raw),
@@ -109,6 +87,36 @@ impl Controller {
                 }
                 (Command::Cancel, None) => {}
             }
+        }
+    }
+
+    fn next_command(
+        &self,
+        commands: &Receiver<Command>,
+        active: &mut Option<Recording>,
+        limit: Duration,
+    ) -> Result<Option<Command>, mpsc::RecvError> {
+        let Some(recording) = active else {
+            return commands.recv().map(Some);
+        };
+        if recording.lock.locked() {
+            active.take();
+            self.show(UiEvent::Notice("Session locked".into()));
+            self.hub.finished(None, false);
+            return Ok(None);
+        }
+        match commands.recv_timeout(
+            limit
+                .saturating_sub(recording.started.elapsed())
+                .min(Duration::from_secs(1)),
+        ) {
+            Ok(command) => Ok(Some(command)),
+            // Reaching the length limit stops the recording as if the key was tapped.
+            Err(RecvTimeoutError::Timeout) if recording.started.elapsed() >= limit => {
+                Ok(Some(Command::Toggle { raw: recording.raw }))
+            }
+            Err(RecvTimeoutError::Timeout) => Ok(None),
+            Err(RecvTimeoutError::Disconnected) => Err(mpsc::RecvError),
         }
     }
 
