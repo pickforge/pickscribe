@@ -1,6 +1,7 @@
 // A small C surface over whisper.cpp for Dart FFI. It mirrors src/transcribe.rs on the
 // desktop: pick the most likely configured language, then decode with the glossary prompt.
 
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -10,6 +11,14 @@
 #include "whisper.h"
 
 #define PS_API extern "C" __attribute__((visibility("default")))
+
+// A loaded model with the state that every dictation reuses, so the compute buffers are
+// allocated once. `abort` stops a transcription in progress.
+struct Model {
+    whisper_context *ctx;
+    whisper_state *state;
+    std::atomic<bool> abort{false};
+};
 
 namespace {
 
@@ -48,6 +57,10 @@ const char *pick_language(whisper_context *ctx, whisper_state *state, const floa
     return best < 0 ? "auto" : whisper_lang_str(best);
 }
 
+bool should_abort(void *model) {
+    return static_cast<Model *>(model)->abort.load(std::memory_order_relaxed);
+}
+
 char *copy_string(const std::string &text) {
     char *out = static_cast<char *>(std::malloc(text.size() + 1));
     if (out != nullptr) std::memcpy(out, text.c_str(), text.size() + 1);
@@ -56,29 +69,44 @@ char *copy_string(const std::string &text) {
 
 }  // namespace
 
-PS_API whisper_context *ps_load(const char *model_path) {
+PS_API Model *ps_load(const char *model_path) {
     whisper_context_params params = whisper_context_default_params();
     params.use_gpu = false;
-    return whisper_init_from_file_with_params_no_state(model_path, params);
+    whisper_context *ctx = whisper_init_from_file_with_params_no_state(model_path, params);
+    if (ctx == nullptr) return nullptr;
+    whisper_state *state = whisper_init_state(ctx);
+    if (state == nullptr) {
+        whisper_free(ctx);
+        return nullptr;
+    }
+    return new Model{ctx, state};
 }
 
-PS_API void ps_unload(whisper_context *ctx) { whisper_free(ctx); }
+PS_API void ps_unload(Model *model) {
+    whisper_free_state(model->state);
+    whisper_free(model->ctx);
+    delete model;
+}
+
+// Any thread may call this. Set it before a transcription starts and clear it before the next
+// one; a transcription that sees it returns 5.
+PS_API void ps_set_abort(Model *model, int32_t abort) {
+    model->abort.store(abort != 0, std::memory_order_relaxed);
+}
 
 // Transcribes 16 kHz mono audio. `languages` is a comma-separated list of codes, and
 // `prompt` may be empty. A beam size of 1 or less decodes greedily. On success, returns 0,
 // stores the text in `*out_text`, to free with ps_free_string, and the language code in
 // `*out_language`, which needs no freeing.
-PS_API int32_t ps_transcribe(whisper_context *ctx, const float *pcm, int32_t n_samples,
+PS_API int32_t ps_transcribe(Model *model, const float *pcm, int32_t n_samples,
                              const char *languages, const char *prompt, int32_t threads,
                              int32_t beam_size, char **out_text, const char **out_language) {
-    whisper_state *state = whisper_init_state(ctx);
-    if (state == nullptr) return 1;
+    whisper_context *ctx = model->ctx;
+    whisper_state *state = model->state;
     const char *language =
         pick_language(ctx, state, pcm, n_samples, split_codes(languages), threads);
-    if (language == nullptr) {
-        whisper_free_state(state);
-        return 2;
-    }
+    if (language == nullptr) return 2;
+    if (should_abort(model)) return 5;
     whisper_full_params params = whisper_full_default_params(
         beam_size > 1 ? WHISPER_SAMPLING_BEAM_SEARCH : WHISPER_SAMPLING_GREEDY);
     if (beam_size > 1) {
@@ -96,16 +124,16 @@ PS_API int32_t ps_transcribe(whisper_context *ctx, const float *pcm, int32_t n_s
     params.print_progress = false;
     params.print_realtime = false;
     params.print_timestamps = false;
+    params.abort_callback = should_abort;
+    params.abort_callback_user_data = model;
     if (whisper_full_with_state(ctx, state, params, pcm, n_samples) != 0) {
-        whisper_free_state(state);
-        return 3;
+        return should_abort(model) ? 5 : 3;
     }
     std::string text;
     const int segments = whisper_full_n_segments_from_state(state);
     for (int i = 0; i < segments; ++i) {
         text += whisper_full_get_segment_text_from_state(state, i);
     }
-    whisper_free_state(state);
     *out_text = copy_string(text);
     *out_language = language;
     return *out_text == nullptr ? 4 : 0;

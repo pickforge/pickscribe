@@ -1,72 +1,125 @@
-import 'dart:convert';
-import 'dart:io';
-import 'dart:typed_data';
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:path_provider/path_provider.dart';
 
+import 'dictionary.dart';
+import 'history.dart';
+import 'models.dart';
+import 'settings.dart';
 import 'whisper.dart';
 
 const pipelineChannel = MethodChannel('pickscribe/pipeline');
+const sampleRate = 16000;
 
-/// Which model and decoding settings dictation uses. Stored as JSON next to the models.
-class DictationConfig {
-  const DictationConfig({required this.model, this.beamSize = 5, this.threads = 6});
-
-  final String model;
-  final int beamSize;
-  final int threads;
-
-  static Future<File> _file() async =>
-      File('${(await getApplicationSupportDirectory()).path}/dictation.json');
-
-  static Future<DictationConfig?> load() async {
-    final file = await _file();
-    if (!file.existsSync()) return null;
-    final json = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-    return DictationConfig(
-      model: json['model'] as String,
-      beamSize: json['beam_size'] as int,
-      threads: json['threads'] as int,
-    );
-  }
-
-  Future<void> save() async => (await _file()).writeAsString(
-    jsonEncode({'model': model, 'beam_size': beamSize, 'threads': threads}),
-  );
-}
-
-/// Turns a recording from the bubble into text. It runs on the app's single engine, so the
-/// model stays loaded between dictations.
+/// Turns a recording from the bubble into text and keeps it in History. It runs on the app's
+/// single engine, so the model stays loaded between dictations.
 class Pipeline {
-  Whisper? _whisper;
-  String? _loadedPath;
-
-  void listen() => pipelineChannel.setMethodCallHandler((call) async {
-    if (call.method != 'process') throw MissingPluginException(call.method);
-    final args = call.arguments as Map;
-    return process(args['pcm'] as Float32List);
+  Pipeline({
+    required this.models,
+    required this.settings,
+    required this.dictionary,
+    required this.history,
   });
 
-  Future<String> process(Float32List pcm) async {
-    final config = await DictationConfig.load();
-    if (config == null) {
-      throw PlatformException(code: 'model', message: 'Choose a model in PickScribe first.');
+  final ModelManager models;
+  final SettingsStore settings;
+  final DictionaryStore dictionary;
+  final HistoryStore history;
+
+  Whisper? _whisper;
+  String? _loadedPath;
+  Future<void> _queue = Future.value();
+  int _jobs = 0;
+  int _cancelledThrough = 0;
+
+  void listen() => pipelineChannel.setMethodCallHandler((call) async {
+    final args = call.arguments as Map?;
+    switch (call.method) {
+      case 'process':
+        return process(args!['pcm'] as Float32List, app: args['app'] as String?);
+      case 'cancel':
+        cancel();
+        return null;
+      case 'delivered':
+        await history.markDelivered(args!['id'] as String, args['ok'] as bool);
+        return null;
+      default:
+        throw MissingPluginException(call.method);
     }
-    final dir = await getApplicationSupportDirectory();
-    final path = '${dir.path}/models/${config.model}';
+  });
+
+  /// Transcribes [pcm], applies the dictionary, and adds the text to History. Returns the
+  /// History id and the text. Dictations run one at a time, in order.
+  Future<Map<String, String>> process(Float32List pcm, {String? app}) {
+    final job = ++_jobs;
+    final result = _queue.then((_) => _run(job, pcm, app));
+    _queue = result.then((_) {}, onError: (_) {});
+    return result;
+  }
+
+  /// Drops every dictation that started before now.
+  void cancel() {
+    _cancelledThrough = _jobs;
+    _whisper?.abort();
+  }
+
+  Future<Map<String, String>> _run(int job, Float32List pcm, String? app) async {
+    if (job <= _cancelledThrough) throw _cancelled();
+    final config = settings.settings;
+    final model = modelByFile(config.model);
+    if (model == null || !models.isDownloaded(model)) {
+      throw PlatformException(code: 'model', message: 'Open PickScribe and download a model.');
+    }
+    final clock = Stopwatch()..start();
+    final whisper = await _load(models.fileOf(model).path);
+    final loadMs = clock.elapsedMilliseconds;
+    if (job <= _cancelledThrough) throw _cancelled();
+    whisper.clearAbort();
+    final Transcription transcription;
+    try {
+      transcription = await whisper.transcribe(
+        pcm,
+        languages: config.languages,
+        prompt: dictionary.dictionary.prompt,
+        threads: config.threads,
+        beamSize: config.beamSize,
+      );
+    } on WhisperCancelled {
+      throw _cancelled();
+    } on WhisperException catch (error) {
+      throw PlatformException(code: 'whisper', message: error.message);
+    }
+    final audioMs = pcm.length * 1000 ~/ sampleRate;
+    // Timings only: logs never hold dictated text.
+    debugPrint(
+      'PickScribe: ${model.file}, ${audioMs}ms audio, load ${loadMs}ms, '
+      'transcribe ${clock.elapsedMilliseconds - loadMs}ms, ${transcription.language}',
+    );
+    final text = dictionary.dictionary.apply(transcription.text);
+    if (text.trim().isEmpty) return {'text': ''};
+    final now = DateTime.now();
+    final item = HistoryItem(
+      id: now.microsecondsSinceEpoch.toString(),
+      at: now,
+      text: text,
+      transcript: transcription.text,
+      audioMs: audioMs,
+      app: app,
+    );
+    await history.add(item);
+    return {'id': item.id, 'text': text};
+  }
+
+  Future<Whisper> _load(String path) async {
     if (_loadedPath != path) {
       _whisper?.dispose();
+      _whisper = null;
+      _loadedPath = null;
       _whisper = await Whisper.load(path);
       _loadedPath = path;
     }
-    final result = await _whisper!.transcribe(
-      pcm,
-      languages: const ['pt', 'en'],
-      threads: config.threads,
-      beamSize: config.beamSize,
-    );
-    return result.text;
+    return _whisper!;
   }
-}
 
+  static PlatformException _cancelled() =>
+      PlatformException(code: 'cancelled', message: 'Cancelled');
+}

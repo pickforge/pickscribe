@@ -4,21 +4,24 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
+import android.content.res.ColorStateList
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
-import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import kotlin.math.abs
 import kotlin.math.hypot
 
 /**
- * Owns the bubble window and its gestures. A tap toggles dictation, a long press starts a raw
- * one, and dropping the bubble on the X at the bottom opens the snooze menu.
+ * Owns the bubble window and its gestures. A tap goes to the service, a long press starts a raw
+ * dictation, and dropping the bubble on the X at the bottom goes to the service too, which
+ * cancels a dictation or opens the snooze menu.
  */
 class Bubble(
     private val context: Context,
@@ -28,6 +31,7 @@ class Bubble(
     interface Actions {
         fun onTap()
         fun onLongPress()
+        fun onDropped()
         fun onSnooze(choice: Snooze)
     }
 
@@ -38,14 +42,18 @@ class Bubble(
     private val density = context.resources.displayMetrics.density
     private val params = overlayParams(sizePx(), sizePx()).apply { gravity = Gravity.TOP or Gravity.START }
     private var shown = false
-    private var target: View? = null
+    private var target: TextView? = null
     private var menu: View? = null
+    private var hint: TextView? = null
+    private val hideHint = Runnable { removeHint() }
 
     init {
         attachGestures()
     }
 
     private fun sizePx() = (prefs.sizeDp * density).toInt()
+
+    private fun dp(value: Int) = (value * density).toInt()
 
     fun show() {
         if (shown || menu != null) return
@@ -67,9 +75,54 @@ class Bubble(
         view.alpha = prefs.opacity
         val saved = prefs.position
         val screen = context.resources.displayMetrics
-        params.x = saved?.first ?: (screen.widthPixels - params.width - (8 * density).toInt())
+        params.x = saved?.first ?: (screen.widthPixels - params.width - dp(8))
         params.y = saved?.second ?: (screen.heightPixels * 0.42f).toInt()
         if (shown) windows.updateViewLayout(view, params)
+    }
+
+    /** Shows a short message beside the bubble, since toasts from a background app are hidden. */
+    fun say(message: String) {
+        removeHint()
+        val label = TextView(context).apply {
+            text = message
+            textSize = 14f
+            setTextColor(TEXT)
+            setPadding(dp(14), dp(9), dp(14), dp(9))
+            maxWidth = dp(260)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(18).toFloat()
+                setColor(PANEL)
+                setStroke(dp(1), BORDER)
+            }
+        }
+        label.measure(
+            View.MeasureSpec.makeMeasureSpec(dp(260), View.MeasureSpec.AT_MOST),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+        )
+        val screen = context.resources.displayMetrics
+        val gap = dp(10)
+        val onRight = params.x + params.width / 2 > screen.widthPixels / 2
+        val layout = overlayParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = if (onRight) params.x - label.measuredWidth - gap else params.x + params.width + gap
+            x = x.coerceIn(gap, screen.widthPixels - label.measuredWidth - gap)
+            y = params.y + (params.height - label.measuredHeight) / 2
+            flags = flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        }
+        windows.addView(label, layout)
+        hint = label
+        label.postDelayed(hideHint, HINT_MS)
+    }
+
+    private fun removeHint() {
+        hint?.let {
+            it.removeCallbacks(hideHint)
+            windows.removeView(it)
+        }
+        hint = null
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -103,12 +156,14 @@ class Bubble(
                     if (!dragging && !pressedLong && (abs(dx) > slop || abs(dy) > slop)) {
                         dragging = true
                         view.removeCallbacks(longPressCheck)
+                        removeHint()
                         showTarget()
                     }
                     if (dragging) {
                         params.x = startX + dx.toInt()
                         params.y = startY + dy.toInt()
                         windows.updateViewLayout(view, params)
+                        highlightTarget(isOverTarget())
                     }
                 }
                 MotionEvent.ACTION_UP -> {
@@ -131,14 +186,18 @@ class Bubble(
         val overTarget = isOverTarget()
         hideTarget()
         if (overTarget) {
-            val saved = prefs.position
-            params.x = saved?.first ?: params.x
-            params.y = saved?.second ?: params.y
-            hide()
-            showMenu()
+            returnToSavedPosition()
+            actions.onDropped()
         } else {
             prefs.savePosition(params.x, params.y)
         }
+    }
+
+    private fun returnToSavedPosition() {
+        val saved = prefs.position
+        params.x = saved?.first ?: params.x
+        params.y = saved?.second ?: params.y
+        if (shown) windows.updateViewLayout(view, params)
     }
 
     private fun targetCenter(): Pair<Float, Float> {
@@ -154,16 +213,12 @@ class Bubble(
     }
 
     private fun showTarget() {
-        val size = (TARGET_DP * density).toInt()
+        val size = dp(TARGET_DP)
         val x = TextView(context).apply {
             text = "✕"
-            textSize = 22f
+            textSize = 20f
             gravity = Gravity.CENTER
-            setTextColor(Color.parseColor("#F2F2F3"))
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#CC0F0F11"))
-            }
+            setTextColor(TEXT)
         }
         val (tx, ty) = targetCenter()
         val layout = overlayParams(size, size).apply {
@@ -174,6 +229,15 @@ class Bubble(
         }
         windows.addView(x, layout)
         target = x
+        highlightTarget(false)
+    }
+
+    private fun highlightTarget(over: Boolean) {
+        target?.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(if (over) EMBER else PANEL)
+            setStroke(dp(1), if (over) EMBER else BORDER)
+        }
     }
 
     private fun hideTarget() {
@@ -181,22 +245,24 @@ class Bubble(
         target = null
     }
 
-    private fun showMenu() {
-        val pad = (16 * density).toInt()
+    fun showSnoozeMenu() {
+        hide()
         val panel = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(pad, pad, pad, pad)
+            setPadding(dp(8), dp(16), dp(8), dp(8))
             background = GradientDrawable().apply {
-                cornerRadius = 20 * density
-                setColor(Color.parseColor("#0F0F11"))
+                cornerRadius = dp(24).toFloat()
+                setColor(PANEL)
+                setStroke(dp(1), BORDER)
             }
         }
         panel.addView(
             TextView(context).apply {
                 text = context.getString(R.string.snooze_title)
-                setTextColor(Color.parseColor("#F2F2F3"))
-                textSize = 16f
-                setPadding(0, 0, 0, pad / 2)
+                setTextColor(TEXT)
+                textSize = 17f
+                typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                setPadding(dp(16), 0, dp(16), dp(8))
             },
         )
         val choices = listOf(
@@ -206,20 +272,26 @@ class Bubble(
             R.string.snooze_always_here to Snooze.ALWAYS_HERE,
         )
         for ((label, choice) in choices) {
-            panel.addView(menuButton(label) { closeMenu(); actions.onSnooze(choice) })
+            panel.addView(menuRow(label, TEXT) { closeMenu(); actions.onSnooze(choice) })
         }
-        panel.addView(menuButton(R.string.snooze_cancel) { closeMenu(); show() })
-        val layout = overlayParams(
-            (280 * density).toInt(),
-            WindowManager.LayoutParams.WRAP_CONTENT,
-        ).apply { gravity = Gravity.CENTER }
+        panel.addView(menuRow(R.string.snooze_cancel, EMBER) { closeMenu(); show() })
+        val layout = overlayParams(dp(296), WindowManager.LayoutParams.WRAP_CONTENT)
+            .apply { gravity = Gravity.CENTER }
         windows.addView(panel, layout)
         menu = panel
     }
 
-    private fun menuButton(label: Int, onClick: () -> Unit) = Button(context).apply {
+    private fun menuRow(label: Int, color: Int, onClick: () -> Unit) = TextView(context).apply {
         text = context.getString(label)
-        isAllCaps = false
+        textSize = 16f
+        setTextColor(color)
+        setPadding(dp(16), dp(14), dp(16), dp(14))
+        val shape = GradientDrawable().apply {
+            cornerRadius = dp(14).toFloat()
+            setColor(Color.WHITE)
+        }
+        background = RippleDrawable(ColorStateList.valueOf(RIPPLE), null, shape)
+        isClickable = true
         setOnClickListener { onClick() }
     }
 
@@ -229,6 +301,7 @@ class Bubble(
     }
 
     fun destroy() {
+        removeHint()
         hideTarget()
         closeMenu()
         hide()
@@ -246,5 +319,11 @@ class Bubble(
     companion object {
         private const val TARGET_DP = 64
         private const val TARGET_MARGIN_DP = 96
+        private const val HINT_MS = 3_000L
+        private val TEXT = Color.parseColor("#F2F2F3")
+        private val EMBER = Color.parseColor("#FF7A1A")
+        private val PANEL = Color.parseColor("#F2141417")
+        private val BORDER = Color.parseColor("#1FF2F2F3")
+        private val RIPPLE = Color.parseColor("#33F2F2F3")
     }
 }

@@ -33,14 +33,26 @@ typedef _Transcribe =
     );
 typedef _FreeStringNative = Void Function(Pointer<Utf8>);
 typedef _FreeString = void Function(Pointer<Utf8>);
+typedef _SetAbortNative = Void Function(Pointer<Void>, Int32);
+typedef _SetAbort = void Function(Pointer<Void>, int);
 
 DynamicLibrary _open() => DynamicLibrary.open('libpickscribe_whisper.so');
+
+final _setAbort = _open().lookupFunction<_SetAbortNative, _SetAbort>('ps_set_abort');
+
+/// What `ps_transcribe` returns after an abort.
+const _cancelled = 5;
 
 class Transcription {
   const Transcription(this.text, this.language);
 
   final String text;
   final String language;
+}
+
+/// Thrown by [Whisper.transcribe] after [Whisper.abort].
+class WhisperCancelled implements Exception {
+  const WhisperCancelled();
 }
 
 class WhisperException implements Exception {
@@ -73,8 +85,15 @@ class Whisper {
     return Whisper._(address);
   }
 
+  /// Stops the transcription in progress, which then throws [WhisperCancelled]. Call
+  /// [clearAbort] before the next one.
+  void abort() => _setAbort(Pointer.fromAddress(_address), 1);
+
+  void clearAbort() => _setAbort(Pointer.fromAddress(_address), 0);
+
   /// Transcribes 16 kHz mono audio. With more than one language, the most likely of them
-  /// wins. A beam size of 1 decodes greedily, which is faster.
+  /// wins. A beam size of 1 decodes greedily, which is faster. Calls must not overlap, since
+  /// they share the model's state.
   Future<Transcription> transcribe(
     Float32List pcm, {
     required List<String> languages,
@@ -85,12 +104,8 @@ class Whisper {
     final address = _address;
     return Isolate.run(() {
       final library = _open();
-      final transcribe = library.lookupFunction<_TranscribeNative, _Transcribe>(
-        'ps_transcribe',
-      );
-      final freeString = library.lookupFunction<_FreeStringNative, _FreeString>(
-        'ps_free_string',
-      );
+      final transcribe = library.lookupFunction<_TranscribeNative, _Transcribe>('ps_transcribe');
+      final freeString = library.lookupFunction<_FreeStringNative, _FreeString>('ps_free_string');
       final samples = malloc<Float>(pcm.length);
       final codes = languages.join(',').toNativeUtf8();
       final glossary = prompt.toNativeUtf8();
@@ -109,6 +124,7 @@ class Whisper {
           outText,
           outLanguage,
         );
+        if (status == _cancelled) throw const WhisperCancelled();
         if (status != 0) throw WhisperException('Transcription failed with code $status');
         final text = outText.value.toDartString();
         freeString(outText.value);
@@ -124,8 +140,6 @@ class Whisper {
   }
 
   void dispose() {
-    _open().lookupFunction<_UnloadNative, _Unload>('ps_unload')(
-      Pointer.fromAddress(_address),
-    );
+    _open().lookupFunction<_UnloadNative, _Unload>('ps_unload')(Pointer.fromAddress(_address));
   }
 }

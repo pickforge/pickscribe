@@ -4,10 +4,10 @@ import android.Manifest
 import android.accessibilityservice.AccessibilityService
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
-import android.widget.Toast
 import io.flutter.embedding.engine.FlutterEngineCache
 import io.flutter.plugin.common.MethodChannel
 
@@ -25,6 +25,10 @@ class DictationService : AccessibilityService(), Bubble.Actions {
     private var state = State.IDLE
     private var raw = false
     private var field: AccessibilityNodeInfo? = null
+
+    // Each dictation gets a number, so a result that arrives after a cancel is dropped.
+    private var session = 0
+    private var lastVisibility: String? = null
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
         bubble.applyPrefs()
         refresh()
@@ -55,12 +59,25 @@ class DictationService : AccessibilityService(), Bubble.Actions {
     private fun refresh() {
         if (state != State.IDLE) return
         val focused = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-        val visible = focused != null &&
-            focused.isEditable &&
-            !focused.isPassword &&
-            keyboardVisible() &&
-            prefs.allows(focused.packageName?.toString())
-        if (visible) bubble.show() else bubble.hide()
+        val app = focused?.packageName?.toString()
+        val hiddenBecause = when {
+            focused == null -> "no field has input focus"
+            !focused.isEditable -> "the focused view is not editable"
+            focused.isPassword -> "the field is a password"
+            !keyboardVisible() -> "the keyboard is closed"
+            !prefs.allows(app) -> "the bubble is snoozed or blocked here"
+            else -> null
+        }
+        logVisibility(app, hiddenBecause)
+        if (hiddenBecause == null) bubble.show() else bubble.hide()
+    }
+
+    // Logs only the app and the reason, never field contents, and only when they change.
+    private fun logVisibility(app: String?, hiddenBecause: String?) {
+        val line = if (hiddenBecause == null) "bubble shown in $app" else "bubble hidden in $app: $hiddenBecause"
+        if (line == lastVisibility) return
+        lastVisibility = line
+        Log.d(TAG, line)
     }
 
     private fun keyboardVisible() =
@@ -70,12 +87,16 @@ class DictationService : AccessibilityService(), Bubble.Actions {
         when (state) {
             State.IDLE -> start(raw = false)
             State.LISTENING -> stop()
-            State.THINKING -> Unit
+            State.THINKING -> cancel()
         }
     }
 
     override fun onLongPress() {
         if (state == State.IDLE) start(raw = true)
+    }
+
+    override fun onDropped() {
+        if (state == State.IDLE) bubble.showSnoozeMenu() else cancel()
     }
 
     override fun onSnooze(choice: Bubble.Snooze) {
@@ -91,23 +112,30 @@ class DictationService : AccessibilityService(), Bubble.Actions {
 
     private fun start(raw: Boolean) {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            toast(R.string.microphone_needed)
+            say(R.string.microphone_needed)
             return
         }
         field = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
         try {
             recorder.start()
         } catch (error: IllegalStateException) {
-            toast(R.string.microphone_unavailable)
+            say(R.string.microphone_unavailable)
             return
         }
         this.raw = raw
+        session++
         state = State.LISTENING
         bubble.view.listening(raw) { recorder.level }
     }
 
     private fun stop() {
         val pcm = recorder.stop()
+        val mine = session
+        if (pcm.size < Recorder.RATE / 4) {
+            say(R.string.too_short)
+            finish()
+            return
+        }
         state = State.THINKING
         bubble.view.thinking()
         val app = field?.packageName?.toString()
@@ -115,22 +143,45 @@ class DictationService : AccessibilityService(), Bubble.Actions {
             "process",
             mapOf("pcm" to pcm, "raw" to raw, "app" to app),
             object : MethodChannel.Result {
-                override fun success(result: Any?) = deliver(result as? String)
+                override fun success(result: Any?) {
+                    if (mine == session) deliver(result as? Map<*, *>)
+                }
 
                 override fun error(code: String, message: String?, details: Any?) {
-                    toastText(message ?: code)
+                    if (mine != session) return
+                    say(message ?: code)
                     finish()
                 }
 
-                override fun notImplemented() = finish()
+                override fun notImplemented() {
+                    if (mine == session) finish()
+                }
             },
         )
     }
 
-    private fun deliver(text: String?) {
+    /** Stops a recording or drops the transcription in progress, without inserting anything. */
+    private fun cancel() {
+        when (state) {
+            State.IDLE -> return
+            State.LISTENING -> recorder.stop()
+            State.THINKING -> pipeline.invokeMethod("cancel", null)
+        }
+        session++
+        say(R.string.cancelled)
+        finish()
+    }
+
+    private fun deliver(result: Map<*, *>?) {
+        val text = result?.get("text") as? String
+        val id = result?.get("id") as? String
         val target = field
-        if (!text.isNullOrEmpty() && target != null && !TextInserter.insert(this, target, text)) {
-            toast(R.string.paste_failed)
+        if (text.isNullOrBlank()) {
+            say(R.string.nothing_heard)
+        } else {
+            val inserted = target != null && TextInserter.insert(this, target, text)
+            if (!inserted) say(R.string.paste_failed)
+            if (id != null) pipeline.invokeMethod("delivered", mapOf("id" to id, "ok" to inserted))
         }
         finish()
     }
@@ -142,11 +193,12 @@ class DictationService : AccessibilityService(), Bubble.Actions {
         refresh()
     }
 
-    private fun toast(message: Int) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    private fun say(message: Int) = bubble.say(getString(message))
 
-    private fun toastText(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    private fun say(message: String) = bubble.say(message)
 
     companion object {
         const val PIPELINE_CHANNEL = "pickscribe/pipeline"
+        private const val TAG = "PickScribe"
     }
 }

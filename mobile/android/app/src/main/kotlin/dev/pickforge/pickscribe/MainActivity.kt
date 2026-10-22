@@ -4,13 +4,20 @@ import android.Manifest
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Bundle
 import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
     private val recorder = Recorder()
+
+    // App icons take a few milliseconds each, so they render off the main thread.
+    private val iconWorker = Executors.newSingleThreadExecutor()
 
     override fun getCachedEngineId() = PickScribeApplication.ENGINE_ID
 
@@ -27,34 +34,105 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
-        MethodChannel(messenger, "pickscribe/system").setMethodCallHandler { call, result ->
-            when (call.method) {
-                "status" -> result.success(
-                    mapOf("microphone" to micGranted(), "service" to serviceEnabled()),
-                )
-                "requestMicrophone" -> {
+        MethodChannel(messenger, "pickscribe/system").setMethodCallHandler(::system)
+        MethodChannel(messenger, "pickscribe/bubble").setMethodCallHandler(::bubble)
+    }
+
+    private fun system(call: MethodCall, result: MethodChannel.Result) {
+        when (call.method) {
+            "status" -> result.success(
+                mapOf(
+                    "microphone" to micGranted(),
+                    "service" to serviceEnabled(),
+                    "version" to packageManager.getPackageInfo(packageName, 0).versionName,
+                ),
+            )
+            "requestMicrophone" -> {
+                // After two refusals Android stops asking, so the app settings page is the way.
+                if (shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO) ||
+                    !askedForMicrophone()
+                ) {
+                    rememberMicrophoneAsked()
                     requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1)
-                    result.success(null)
+                } else {
+                    openAppSettings()
                 }
-                "openAccessibilitySettings" -> {
-                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                    result.success(null)
+                result.success(null)
+            }
+            "openAccessibilitySettings" -> {
+                startActivity(accessibilitySettings())
+                result.success(null)
+            }
+            "describeApps" -> {
+                val packages = call.argument<List<String>>("packages").orEmpty()
+                val iconPx = call.argument<Int>("iconPx") ?: 96
+                iconWorker.execute {
+                    val apps = Apps.describe(this, packages, iconPx)
+                    runOnUiThread { result.success(apps) }
                 }
-                else -> result.notImplemented()
+            }
+            "launchableApps" -> iconWorker.execute {
+                val apps = Apps.launchable(this)
+                runOnUiThread { result.success(apps) }
+            }
+            else -> result.notImplemented()
+        }
+    }
+
+    private fun bubble(call: MethodCall, result: MethodChannel.Result) {
+        val prefs = BubblePrefs(this)
+        when (call.method) {
+            "get" -> {}
+            "setLook" -> prefs.setLook(
+                call.argument<Int>("size"),
+                call.argument<Double>("opacity")?.toFloat(),
+            )
+            "resume" -> prefs.resume()
+            "block" -> call.argument<String>("package")?.let(prefs::block)
+            "unblock" -> call.argument<String>("package")?.let(prefs::unblock)
+            else -> {
+                result.notImplemented()
+                return
             }
         }
+        result.success(
+            mapOf(
+                "size" to prefs.sizeDp,
+                "opacity" to prefs.opacity.toDouble(),
+                "blocked" to prefs.blockedApps.sorted(),
+                "snoozedUntil" to prefs.snoozedUntil,
+            ),
+        )
     }
 
     private fun micGranted() =
         checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+    private fun askedForMicrophone() =
+        getSharedPreferences(STATE, MODE_PRIVATE).getBoolean(MIC_ASKED, false)
+
+    private fun rememberMicrophoneAsked() =
+        getSharedPreferences(STATE, MODE_PRIVATE).edit().putBoolean(MIC_ASKED, true).apply()
+
+    private fun openAppSettings() = startActivity(
+        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)),
+    )
+
+    private fun serviceComponent() = ComponentName(this, DictationService::class.java).flattenToString()
 
     private fun serviceEnabled(): Boolean {
         val enabled = Settings.Secure.getString(
             contentResolver,
             Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
         ).orEmpty()
-        val ours = ComponentName(this, DictationService::class.java).flattenToString()
-        return enabled.split(':').any { it.equals(ours, ignoreCase = true) }
+        return enabled.split(':').any { it.equals(serviceComponent(), ignoreCase = true) }
+    }
+
+    // Settings highlights the service in its list when it gets the component in these extras.
+    private fun accessibilitySettings() = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+        val component = serviceComponent()
+        putExtra(":settings:fragment_args_key", component)
+        putExtra(":settings:show_fragment_args", Bundle().apply { putString(":settings:fragment_args_key", component) })
     }
 
     private fun startRecording(result: MethodChannel.Result) {
@@ -73,6 +151,12 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         recorder.stop()
+        iconWorker.shutdown()
         super.onDestroy()
+    }
+
+    companion object {
+        private const val STATE = "app"
+        private const val MIC_ASKED = "microphone_asked"
     }
 }

@@ -6,8 +6,10 @@ import 'package:pickscribe/wav.dart';
 Uint8List _wav({required int bits, required List<int> samples, bool extraChunk = false}) {
   final builder = BytesBuilder();
   void text(String s) => builder.add(s.codeUnits);
-  void u32(int v) => builder.add((ByteData(4)..setUint32(0, v, Endian.little)).buffer.asUint8List());
-  void u16(int v) => builder.add((ByteData(2)..setUint16(0, v, Endian.little)).buffer.asUint8List());
+  void u32(int v) =>
+      builder.add((ByteData(4)..setUint32(0, v, Endian.little)).buffer.asUint8List());
+  void u16(int v) =>
+      builder.add((ByteData(2)..setUint16(0, v, Endian.little)).buffer.asUint8List());
   text('RIFF');
   u32(0);
   text('WAVE');

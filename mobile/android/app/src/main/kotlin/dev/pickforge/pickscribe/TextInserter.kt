@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Bundle
+import android.os.PersistableBundle
 import android.view.accessibility.AccessibilityNodeInfo
 
 /** Puts dictated text at the cursor of a text field in another app. */
@@ -11,11 +12,14 @@ object TextInserter {
     /**
      * Pastes through the clipboard, since the field's own paste handles rich editors and web
      * views. Fields that refuse to paste get the text merged in with ACTION_SET_TEXT. The text
-     * stays on the clipboard either way, so a failed insert can still be pasted by hand.
+     * stays on the clipboard either way, so a failed insert can still be pasted by hand. The
+     * clip is marked sensitive, so keyboards keep it out of clipboard history and cloud sync.
      */
     fun insert(context: Context, field: AccessibilityNodeInfo, text: String): Boolean {
         val clipboard = context.getSystemService(ClipboardManager::class.java)
-        clipboard.setPrimaryClip(ClipData.newPlainText("PickScribe", text))
+        val clip = ClipData.newPlainText("PickScribe", text)
+        clip.description.extras = PersistableBundle().apply { putBoolean(EXTRA_IS_SENSITIVE, true) }
+        clipboard.setPrimaryClip(clip)
         if (!field.refresh()) return false
         if (field.performAction(AccessibilityNodeInfo.ACTION_PASTE)) return true
         return setText(field, text)
@@ -48,4 +52,7 @@ object TextInserter {
         if (start < 0 || end < 0 || start > length || end > length) return length to length
         return minOf(start, end) to maxOf(start, end)
     }
+
+    // ClipDescription.EXTRA_IS_SENSITIVE, which the SDK names only from Android 13.
+    private const val EXTRA_IS_SENSITIVE = "android.content.extra.IS_SENSITIVE"
 }
