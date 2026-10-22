@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="service_label">PickScribe dictation</string>
+    <string name="service_description">Shows a bubble over text fields. Tap it, speak, and tap again to put the text in the field. PickScribe reads only the focused field, to place the text.</string>
+    <string name="snooze_title">Hide the bubble</string>
+    <string name="snooze_15_minutes">For 15 minutes</string>
+    <string name="snooze_hour">For 1 hour</string>
+    <string name="snooze_tomorrow">Until tomorrow</string>
+    <string name="snooze_always_here">Always in this app</string>
+    <string name="snooze_cancel">Keep it</string>
+    <string name="microphone_needed">Open PickScribe and allow the microphone.</string>
+    <string name="microphone_unavailable">The microphone is in use by another app.</string>
+    <string name="paste_failed">This field refused the text. It is on the clipboard.</string>
+</resources>
