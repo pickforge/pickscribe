@@ -80,22 +80,24 @@ pub fn deliver(
     deliver_with(
         text,
         latched,
+        &locked,
         |text| {
             copy(text)?;
             thread::sleep(PASTE_DELAY);
             Ok(())
         },
-        || paste_with(focus, locked, active_window, |args| run("wtype", args)),
+        || paste_with(focus, &locked, active_window, |args| run("wtype", args)),
     )
 }
 
 fn deliver_with(
     text: &str,
     latched: impl Fn() -> bool,
+    locked: impl Fn() -> bool,
     copy: impl FnOnce(&str) -> Result<()>,
     paste: impl FnOnce() -> Delivery,
 ) -> Delivery {
-    if latched() {
+    if latched() || locked() {
         return Delivery::SessionLocked { copied: false };
     }
     if let Err(err) = copy(text) {
@@ -273,6 +275,18 @@ mod tests {
     }
 
     #[test]
+    fn fresh_lock_check_blocks_copy_and_dispatch_before_the_latch() {
+        let delivery = deliver_with(
+            "dictation",
+            || false,
+            || true,
+            |_| panic!("locked delivery must not copy"),
+            || panic!("locked delivery must not dispatch"),
+        );
+        assert_eq!(delivery, Delivery::SessionLocked { copied: false });
+    }
+
+    #[test]
     fn delivery_checks_after_focus_and_immediately_before_dispatch() {
         let steps = std::cell::RefCell::new(Vec::new());
         let focus = Focus {
@@ -283,6 +297,10 @@ mod tests {
             "dictation",
             || {
                 steps.borrow_mut().push("latch");
+                false
+            },
+            || {
+                steps.borrow_mut().push("lock");
                 false
             },
             |_| {
@@ -311,7 +329,7 @@ mod tests {
         assert_eq!(delivery, Delivery::Pasted);
         assert_eq!(
             *steps.borrow(),
-            ["latch", "copy", "focus", "lock", "dispatch"]
+            ["latch", "lock", "copy", "focus", "lock", "dispatch"]
         );
     }
 
@@ -326,6 +344,7 @@ mod tests {
         let delivery = deliver_with(
             "dictation",
             || false,
+            || locked.get(),
             |_| {
                 copied.set(true);
                 Ok(())

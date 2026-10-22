@@ -22,6 +22,7 @@ const MAX_SUGGESTIONS: usize = 5;
 const EXAMPLE_CHARS: usize = 90;
 const MAX_BATCH: usize = 50;
 const MANUAL_BATCH: usize = 10;
+const MAX_AUTOMATIC_BATCHES: usize = 3;
 
 const INSTRUCTIONS: &str = "\
 You review dictations for speech recognition errors. The user dictates in Brazilian Portuguese \
@@ -386,8 +387,8 @@ fn excerpt(text: &str, word: &str) -> String {
     piece
 }
 
-/// Reviews the unreviewed AI dictations once there are `review_every` of them, then asks the
-/// user about each new suggestion. Runs on its own thread; errors only reach the log.
+/// Reviews up to three due batches of AI dictations and announces new suggestions once.
+/// Runs on its own thread; errors only reach the log.
 pub fn run_due(client: &cleanup::Client, config: &Config, hub: &Arc<Hub>) {
     if config.review_every == 0 {
         return;
@@ -405,12 +406,10 @@ pub fn run_due(client: &cleanup::Client, config: &Config, hub: &Arc<Hub>) {
             let fresh = review(client, config, &key, due)?;
             if !fresh.is_empty() {
                 hub.suggestions_changed();
-                for _ in fresh {
-                    announce();
-                }
             }
-            Ok(())
+            Ok(!fresh.is_empty())
         },
+        announce,
     );
     if let Err(err) = result {
         eprintln!("pickscribe: review failed: {err:#}");
@@ -419,15 +418,21 @@ pub fn run_due(client: &cleanup::Client, config: &Config, hub: &Arc<Hub>) {
 
 fn drain_due(
     mut next: impl FnMut() -> Result<Vec<Item>>,
-    mut review: impl FnMut(&[Item]) -> Result<()>,
+    mut review: impl FnMut(&[Item]) -> Result<bool>,
+    mut announce: impl FnMut(),
 ) -> Result<()> {
-    loop {
+    let mut announced = false;
+    for _ in 0..MAX_AUTOMATIC_BATCHES {
         let due = next()?;
         if due.is_empty() {
             return Ok(());
         }
-        review(&due)?;
+        if review(&due)? && !announced {
+            announce();
+            announced = true;
+        }
     }
+    Ok(())
 }
 
 /// Tells the user about a suggestion. Clicking the notification opens the PickScribe panel on
@@ -579,8 +584,9 @@ mod tests {
             |batch| {
                 batches.push(batch.iter().map(|item| item.id.clone()).collect::<Vec<_>>());
                 through.set(batch.last().unwrap().id.parse().unwrap());
-                Ok(())
+                Ok(false)
             },
+            || panic!("no suggestions to announce"),
         )
         .unwrap();
         assert_eq!(batches, [vec!["1", "2"], vec!["3", "4"], vec!["5", "6"]]);
@@ -596,13 +602,52 @@ mod tests {
                         bail!("request failed");
                     }
                     through.set(batch.last().unwrap().id.parse().unwrap());
-                    Ok(())
+                    Ok(false)
                 },
+                || panic!("no suggestions to announce"),
             )
             .is_err()
         );
         assert_eq!(attempts, 2);
         assert_eq!(through.get(), 2);
+    }
+
+    #[test]
+    fn automatic_review_caps_batches_and_resumes_on_the_next_trigger() {
+        let items: Vec<_> = (1..=500)
+            .map(|id| item(&id.to_string(), Mode::Ai, "a"))
+            .collect();
+        let through = std::cell::Cell::new(0);
+        for expected in [30, 60] {
+            let mut attempts = 0;
+            drain_due(
+                || Ok(due_batch(&items, through.get(), 10)),
+                |batch| {
+                    attempts += 1;
+                    through.set(batch.last().unwrap().id.parse().unwrap());
+                    Ok(false)
+                },
+                || panic!("no suggestions to announce"),
+            )
+            .unwrap();
+            assert_eq!(attempts, 3);
+            assert_eq!(through.get(), expected);
+        }
+    }
+
+    #[test]
+    fn automatic_review_announces_once_if_any_batch_has_suggestions() {
+        for counts in [[0, 0, 0], [5, 5, 5], [0, 5, 5], [0, 0, 5]] {
+            let mut batches = counts.into_iter();
+            let mut notifications = 0;
+            drain_due(
+                || Ok(vec![item("1", Mode::Ai, "a")]),
+                |_| Ok(batches.next().unwrap() > 0),
+                || notifications += 1,
+            )
+            .unwrap();
+            assert_eq!(notifications, usize::from(counts.iter().any(|&n| n > 0)));
+        }
     }
 
     #[test]
