@@ -48,8 +48,6 @@ Panel {
   property var history: []
   property var dictionary: []
   property var suggestions: []
-  property string devloopText: ""
-  property bool devloopFailed: false
 
   property string errorText: ""
   property string copiedId: ""
@@ -85,6 +83,7 @@ Panel {
     if (value.history_rev !== historyRev) {
       historyRev = value.history_rev
       historyReader.load()
+      suggestionReader.load()
     }
     if (value.dictionary_rev !== dictionaryRev) {
       dictionaryRev = value.dictionary_rev
@@ -136,7 +135,16 @@ Panel {
     actionProc.running = true
   }
 
-  function toggleRecording() { runAction(["toggle"]) }
+  function toggleRecording() {
+    root.close()
+    stopTimer.restart()
+  }
+
+  Timer {
+    id: stopTimer
+    interval: 100
+    onTriggered: root.runAction(["toggle"])
+  }
   function cancelRecording() { runAction(["cancel"]) }
 
   function copyEntry(entry) {
@@ -207,26 +215,6 @@ Panel {
     return Qt.formatDateTime(date, "d MMM yy")
   }
 
-  function shortSha(value) { return String(value || "").slice(0, 7) }
-
-  // `devloop status pickscribe --json`: state is ok, behind, building, failed, or never.
-  function acceptDevloop(o) {
-    devloopText = ""
-    devloopFailed = false
-    if (!o || typeof o !== "object") return
-    var installed = shortSha(o.installed)
-    if (o.state === "building") {
-      devloopText = "Building " + shortSha(o.building || o.target)
-    } else if (o.state === "failed") {
-      devloopText = "Build of " + shortSha(o.target) + " failed · devloop log pickscribe"
-      devloopFailed = true
-    } else if (o.state === "behind") {
-      devloopText = "Update pending: " + shortSha(o.target)
-    } else if (o.state === "ok" && installed !== "") {
-      devloopText = "Up to date at " + installed
-    }
-  }
-
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
@@ -235,7 +223,7 @@ Panel {
     if (panelFlick) panelFlick.contentY = 0
     historyReader.load()
     dictReader.load()
-    devloopReader.load()
+    suggestionReader.load()
   }
 
   onExecutableChanged: {
@@ -254,7 +242,7 @@ Panel {
       return JSON.stringify({
         state: root.daemonState, opened: root.opened, executable: root.executable,
         history: root.history.length, dictionary: root.dictionary.length, suggestions: root.suggestions.length,
-        error: root.errorText, devloop: root.devloopText
+        error: root.errorText
       })
     }
   }
@@ -314,17 +302,6 @@ Panel {
     args: root.command(root.executable, ["suggestions", "--json"])
     onLoaded: function(text) { root.suggestions = root.parseList(text, "suggestions") }
     onFailed: function(message) { if (root.daemonUp) root.showError(message) }
-  }
-
-  JsonReader {
-    id: devloopReader
-    args: root.command("devloop", ["status", "pickscribe", "--json"])
-    onLoaded: function(text) {
-      var value = null
-      try { value = JSON.parse(text) } catch (e) { value = null }
-      root.acceptDevloop(value)
-    }
-    onFailed: function(message) { root.devloopText = "" }
   }
 
   Timer { id: errorTimer; interval: 6000; onTriggered: root.errorText = "" }
@@ -754,21 +731,6 @@ Panel {
               tooltipText: root.configPath
               onClicked: root.openSettings()
             }
-
-            Text {
-              anchors.right: parent.right
-              anchors.left: settingsButton.right
-              anchors.leftMargin: Style.space(8)
-              anchors.verticalCenter: parent.verticalCenter
-              visible: root.devloopText !== ""
-              textFormat: Text.PlainText
-              text: root.devloopText
-              horizontalAlignment: Text.AlignRight
-              elide: Text.ElideRight
-              color: root.devloopFailed ? root.urgent : root.dim
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
-            }
           }
         }
       }
@@ -991,7 +953,7 @@ Panel {
       Text {
         width: parent.width
         textFormat: Text.PlainText
-        text: String(suggestionRow.suggestion.example || "")
+        text: String(suggestionRow.suggestion.context || "")
         wrapMode: Text.WordWrap
         maximumLineCount: 2
         elide: Text.ElideRight

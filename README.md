@@ -14,13 +14,15 @@ A small capsule floats at the bottom of the screen while you dictate. It shows t
 | Shift + Right Alt | Start or stop dictation. The raw transcript is pasted and never leaves your machine. Text-colored bars. |
 | Esc | Discard the current recording. |
 
-Right Alt only counts when you tap it alone, so AltGr characters and Alt shortcuts keep working.
+Right Alt only counts when you tap it alone, so AltGr characters and Alt shortcuts keep working. Shift selects raw mode.
+
+Esc also reaches the focused app. It does nothing in PickScribe while the capsule is thinking.
 
 On Omarchy the capsule takes its colors from the current theme. Elsewhere it uses the Pickforge colors.
 
 ## Requirements
 
-PickScribe targets Wayland. It reads the focused window from Hyprland to choose the paste shortcut; on other compositors it always pastes with Ctrl+V.
+PickScribe needs Wayland with wlr-layer-shell support: Hyprland, other wlroots compositors, or KDE. It reads the focused window from Hyprland to choose the paste shortcut; on other compositors it always pastes with Ctrl+V.
 
 On Arch Linux:
 
@@ -127,7 +129,9 @@ pickscribe watch                   # the same, live, one line per change
 
 ## Privacy
 
-Audio never leaves your machine. With Right Alt, the transcript text and your dictionary go to the Anthropic API for cleanup, and again later for the misheard word review. With Shift + Right Alt, nothing leaves your machine. Recent dictations stay in `~/.local/share/pickscribe/history.jsonl`, readable only by you. Set `history_limit = 0` to keep none. See [SECURITY.md](SECURITY.md).
+Audio never leaves your machine. With Right Alt, the transcript text and your dictionary go to the Anthropic API for cleanup, and again later for the misheard word review. With Shift + Right Alt at either tap, transcript text never leaves your machine. AI mode opens the HTTPS connection to Anthropic when recording starts, before any text exists.
+
+Recent dictations stay in `~/.local/share/pickscribe/history.jsonl`, readable only by you. Set `history_limit = 0` to keep none. Clipboard managers, such as Omarchy's clipboard history, keep their own copy of pasted text. See [SECURITY.md](SECURITY.md).
 
 ## Development
 

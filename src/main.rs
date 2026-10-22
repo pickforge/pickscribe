@@ -165,6 +165,7 @@ fn run(cli: Cli) -> Result<()> {
 }
 
 fn daemon() -> Result<()> {
+    overlay::check_supported()?;
     let config = Config::load()?;
     let hub = Arc::new(Hub::default());
     let (commands, receiver) = mpsc::channel();

@@ -144,6 +144,16 @@ struct Widgets {
     view: Rc<RefCell<View>>,
 }
 
+pub fn check_supported() -> anyhow::Result<()> {
+    gtk::init()?;
+    if !gtk4_layer_shell::is_supported() {
+        anyhow::bail!(
+            "PickScribe needs a Wayland compositor with wlr-layer-shell support (Hyprland, wlroots, or KDE)"
+        );
+    }
+    Ok(())
+}
+
 pub fn run(events: async_channel::Receiver<UiEvent>, level: Level) {
     let app = gtk::Application::builder()
         .application_id("dev.pickforge.PickScribe")
