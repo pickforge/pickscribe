@@ -43,10 +43,10 @@ impl Entry {
 }
 
 fn clean_field(value: &str, name: &str) -> Result<String> {
+    let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
     if value.chars().any(char::is_control) {
         bail!("the {name} cannot contain control characters");
     }
-    let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
     if value.is_empty() {
         bail!("the {name} is empty");
     }
@@ -268,6 +268,23 @@ mod tests {
     }
 
     #[test]
+    fn whitespace_is_normalized_before_rejecting_controls() {
+        for whitespace in ['\t', '\n', '\r', '\u{85}'] {
+            let entry = Entry::new(&format!("Pick{whitespace}forge"), Some("Bit\tforge")).unwrap();
+            assert_eq!(entry.text, "Pick forge");
+            assert_eq!(entry.heard.as_deref(), Some("Bit forge"));
+        }
+        let dictionary = Dictionary::parse("Bitforge\t->\tPickforge\n\tOther\tterm\t\n");
+        assert_eq!(dictionary.entries.len(), 2);
+        let lines: String = dictionary.entries.iter().map(|e| e.line() + "\n").collect();
+        assert_eq!(Dictionary::parse(&lines), dictionary);
+        assert_eq!(
+            dictionary.entries[0],
+            Entry::new("Pickforge", Some("Bitforge")).unwrap()
+        );
+    }
+
+    #[test]
     fn corrections_replace_whole_words_ignoring_case() {
         let dictionary = Dictionary::parse("Bitforge -> Pickforge\npick check -> PickCheck\n");
         assert_eq!(
@@ -295,13 +312,13 @@ mod tests {
 
     #[test]
     fn invalid_entries_are_rejected() {
-        for control in ['\0', '\n', '\r', '\t', '\u{7f}', '\u{85}'] {
+        for control in ['\0', '\u{7f}', '\u{1b}'] {
             let value = format!("a{control}b");
             assert!(Entry::new(&value, None).is_err());
             assert!(Entry::new("term", Some(&value)).is_err());
         }
         assert!(
-            Dictionary::parse("bad\0term\n\tBad\nBad\t\nGood")
+            Dictionary::parse("bad\0term\nGood")
                 .entries
                 .iter()
                 .all(|e| e.text == "Good")
