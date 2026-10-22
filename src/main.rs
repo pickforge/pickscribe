@@ -291,7 +291,7 @@ fn review_now() -> Result<()> {
     let config = Config::load()?;
     let key = config::api_key()
         .context("no ANTHROPIC_API_KEY in ~/.config/pickscribe/env or the environment")?;
-    let due = review::unreviewed(&history::load()?, config.review_every.max(1))?;
+    let due = review::unreviewed(&history::load()?, review::batch_size(config.review_every))?;
     if due.is_empty() {
         println!("No new AI dictations to review.");
         return Ok(());

@@ -3,7 +3,7 @@
 //! user's yes. Raw dictations are never reviewed, because they must not leave the machine.
 
 use std::fs::File;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
@@ -20,6 +20,8 @@ use crate::status::Hub;
 /// At most this many suggestions per review, so a bad batch cannot flood the user.
 const MAX_SUGGESTIONS: usize = 5;
 const EXAMPLE_CHARS: usize = 90;
+const MAX_BATCH: usize = 50;
+const MANUAL_BATCH: usize = 10;
 
 const INSTRUCTIONS: &str = "\
 You review dictations for speech recognition errors. The user dictates in Brazilian Portuguese \
@@ -66,42 +68,72 @@ fn path() -> PathBuf {
     config::data_dir().join("suggestions.json")
 }
 
-fn read_store() -> Result<Store> {
-    match std::fs::read_to_string(path()) {
-        Ok(text) => Ok(serde_json::from_str(&text).unwrap_or_default()),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Store::default()),
+fn read_store(path: &Path) -> Result<(Store, bool)> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => parse_store(&text, history::load),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok((Store::default(), false)),
         Err(err) => Err(err).context("cannot read suggestions"),
     }
 }
 
-fn load() -> Result<Store> {
-    // Rewriting old stores drops the former transcript excerpts and model explanations.
-    let text = match std::fs::read_to_string(path()) {
-        Ok(text) => text,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Store::default()),
-        Err(err) => return Err(err).context("cannot read suggestions"),
-    };
-    let value: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-    if value["pending"].as_array().is_some_and(|pending| {
+fn parse_store(text: &str, history: impl FnOnce() -> Result<Vec<Item>>) -> Result<(Store, bool)> {
+    let invalid = || anyhow::anyhow!("cannot parse suggestions");
+    let value: Value = serde_json::from_str(text).map_err(|_| invalid())?;
+    let mut store: Store = serde_json::from_value(value.clone()).map_err(|_| invalid())?;
+    let legacy = value["pending"].as_array().is_some_and(|pending| {
         pending
             .iter()
             .any(|s| s.get("example").is_some() || s.get("reason").is_some())
-    }) {
-        edit(|_| Ok(()))?;
-        return read_store();
+    });
+    if legacy {
+        let items = history()?;
+        for (suggestion, old) in store
+            .pending
+            .iter_mut()
+            .zip(value["pending"].as_array().unwrap())
+        {
+            if !suggestion.history_id.is_empty() {
+                continue;
+            }
+            let example = old["example"].as_str();
+            let batch_id = suggestion.id.rsplit_once('-').map(|(id, _)| id);
+            if let Some(item) = items.iter().rev().find(|item| {
+                item.mode == Mode::Ai
+                    && dictionary::contains_word(&item.transcript, &suggestion.heard)
+                    && match example {
+                        Some(example) => excerpt(&item.transcript, &suggestion.heard) == example,
+                        None => Some(item.id.as_str()) == batch_id,
+                    }
+            }) {
+                suggestion.history_id.clone_from(&item.id);
+            }
+        }
     }
-    Ok(serde_json::from_value(value).unwrap_or_default())
+    Ok((store, legacy))
+}
+
+fn load() -> Result<Store> {
+    let (store, legacy) = read_store(&path())?;
+    if legacy {
+        // Keep a history reference before dropping old excerpts and model explanations.
+        edit(|_| Ok(()))?;
+        return read_store(&path()).map(|(store, _)| store);
+    }
+    Ok(store)
 }
 
 /// Applies `change` under a lock, so the daemon and the CLI never overwrite each other.
 fn edit<T>(change: impl FnOnce(&mut Store) -> Result<T>) -> Result<T> {
-    let dir = config::data_dir();
-    std::fs::create_dir_all(&dir)?;
-    let lock = File::create(dir.join("suggestions.lock"))?;
+    edit_at(&path(), change)
+}
+
+fn edit_at<T>(path: &Path, change: impl FnOnce(&mut Store) -> Result<T>) -> Result<T> {
+    std::fs::create_dir_all(path.parent().context("suggestions path has no parent")?)?;
+    let lock = File::create(path.with_extension("lock"))?;
     lock.lock()?;
-    let mut store = read_store()?;
+    let (mut store, _) = read_store(path)?;
     let value = change(&mut store)?;
-    config::write_private(&path(), serde_json::to_string_pretty(&store)?.as_bytes())?;
+    config::write_private(path, serde_json::to_string_pretty(&store)?.as_bytes())?;
     Ok(value)
 }
 
@@ -145,16 +177,31 @@ pub fn unreviewed(items: &[Item], limit: usize) -> Result<Vec<Item>> {
 }
 
 fn newer_ai(items: &[Item], through: u128, limit: usize) -> Vec<Item> {
-    let mut due: Vec<Item> = items
+    items
         .iter()
-        .rev()
         .filter(|item| item.mode == Mode::Ai)
         .filter(|item| item.id.parse::<u128>().unwrap_or(0) > through)
-        .take(limit)
+        .take(limit.min(MAX_BATCH))
         .cloned()
-        .collect();
-    due.reverse();
-    due
+        .collect()
+}
+
+pub fn batch_size(review_every: usize) -> usize {
+    if review_every == 0 {
+        MANUAL_BATCH
+    } else {
+        review_every.min(MAX_BATCH)
+    }
+}
+
+fn due_batch(items: &[Item], through: u128, review_every: usize) -> Vec<Item> {
+    let due = items
+        .iter()
+        .filter(|item| item.mode == Mode::Ai && item.id.parse::<u128>().unwrap_or(0) > through);
+    if review_every == 0 || due.count() < review_every {
+        return Vec::new();
+    }
+    newer_ai(items, through, batch_size(review_every))
 }
 
 /// Reviews `items` and stores what it finds. Returns only the new suggestions.
@@ -315,11 +362,17 @@ fn excerpt(text: &str, word: &str) -> String {
 /// Reviews the unreviewed AI dictations once there are `review_every` of them, then asks the
 /// user about each new suggestion. Runs on its own thread; errors only reach the log.
 pub fn run_due(client: &cleanup::Client, config: &Config, hub: &Arc<Hub>) {
+    if config.review_every == 0 {
+        return;
+    }
     let Some(key) = config::api_key() else {
         return;
     };
-    let due = match history::load().and_then(|items| unreviewed(&items, config.review_every)) {
-        Ok(due) if due.len() >= config.review_every => due,
+    let due = match history::load().and_then(|items| {
+        let through = load()?.reviewed_through.parse::<u128>().unwrap_or(0);
+        Ok(due_batch(&items, through, config.review_every))
+    }) {
+        Ok(due) if !due.is_empty() => due,
         Ok(_) => return,
         Err(err) => {
             eprintln!("pickscribe: review skipped: {err:#}");
@@ -474,15 +527,105 @@ mod tests {
     }
 
     #[test]
-    fn retries_only_use_the_newest_due_items() {
-        let items = [
+    fn legacy_suggestions_keep_context_from_matching_history() {
+        let items = vec![
+            item("1", Mode::Ai, "earlier Bitforge dictation"),
+            item("2", Mode::Ai, "another dictation"),
+        ];
+        let legacy = json!({
+            "reviewed_through": "2",
+            "rejected": [{"heard": "old", "meant": "term"}],
+            "pending": [
+                {"id": "2-0", "heard": "Bitforge", "meant": "Pickforge",
+                 "example": "earlier Bitforge dictation", "reason": "private explanation"},
+                {"id": "2-1", "heard": "missing", "meant": "term",
+                 "example": "deleted history", "reason": "old reason"}
+            ]
+        });
+        let (store, migrated) = parse_store(&legacy.to_string(), || Ok(items.clone())).unwrap();
+        assert!(migrated);
+        assert_eq!(store.pending[0].history_id, "1");
+        assert_eq!(
+            suggestion_context(&store.pending[0], &items),
+            "earlier Bitforge dictation"
+        );
+        assert!(store.pending[1].history_id.is_empty());
+        assert_eq!(store.reviewed_through, "2");
+        assert_eq!(store.rejected.len(), 1);
+        let saved = serde_json::to_string(&store).unwrap();
+        assert!(!saved.contains("example"));
+        assert!(!saved.contains("reason"));
+        assert!(!saved.contains("dictation"));
+    }
+
+    #[test]
+    fn malformed_suggestions_refuse_edits_without_changing_the_file() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("suggestions-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("suggestions.json");
+        for text in [
+            "{\"reviewed_through\":\"12\",\"rejected\":[",
+            "{\"reviewed_through\":\"12\",\"rejected\":\"private text\"}",
+            "null",
+        ] {
+            std::fs::write(&path, text).unwrap();
+            let error =
+                edit_at(&path, |_| -> Result<()> { panic!("edit must not run") }).unwrap_err();
+            assert!(!format!("{error:#}").contains("private text"));
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn retries_use_the_same_oldest_bounded_batch() {
+        let mut items = vec![
             item("1", Mode::Ai, "a"),
             item("2", Mode::Raw, "b"),
             item("3", Mode::Ai, "c"),
             item("4", Mode::Ai, "d"),
         ];
-        let picked: Vec<_> = newer_ai(&items, 0, 2).into_iter().map(|i| i.id).collect();
-        assert_eq!(picked, ["3", "4"]);
+        let batch = newer_ai(&items, 0, 2);
+        let picked: Vec<_> = batch.iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(picked, ["1", "3"]);
+        items.push(item("5", Mode::Ai, "e"));
+        assert_eq!(newer_ai(&items, 0, 2), batch);
+        let picked: Vec<_> = newer_ai(&items, 3, 2).into_iter().map(|i| i.id).collect();
+        assert_eq!(picked, ["4", "5"]);
+    }
+
+    #[test]
+    fn manual_review_uses_a_bounded_batch_when_automatic_review_is_off() {
+        assert_eq!(batch_size(0), 10);
+        assert_eq!(batch_size(3), 3);
+        assert_eq!(batch_size(usize::MAX), MAX_BATCH);
+        let items: Vec<_> = (1..=100)
+            .map(|id| item(&id.to_string(), Mode::Ai, "a"))
+            .collect();
+        assert_eq!(newer_ai(&items, 0, batch_size(0)).len(), 10);
+        let batch = newer_ai(&items, 0, usize::MAX);
+        assert_eq!(batch.len(), MAX_BATCH);
+        assert_eq!(batch.first().unwrap().id, "1");
+        assert_eq!(batch.last().unwrap().id, MAX_BATCH.to_string());
+    }
+
+    #[test]
+    fn automatic_review_keeps_its_threshold_and_bounds_each_attempt() {
+        let mut items: Vec<_> = (1..=99)
+            .map(|id| item(&id.to_string(), Mode::Ai, "a"))
+            .collect();
+        assert!(due_batch(&items, 0, 100).is_empty());
+        items.push(item("100", Mode::Raw, "b"));
+        assert!(due_batch(&items, 0, 100).is_empty());
+        items.push(item("101", Mode::Ai, "c"));
+        let batch = due_batch(&items, 0, 100);
+        assert_eq!(batch.len(), MAX_BATCH);
+        items.push(item("102", Mode::Ai, "d"));
+        assert_eq!(due_batch(&items, 0, 100), batch);
+        assert!(due_batch(&items, 0, 0).is_empty());
+        assert_eq!(due_batch(&items, 50, 10)[0].id, "51");
     }
 
     #[test]
