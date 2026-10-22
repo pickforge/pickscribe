@@ -28,15 +28,19 @@ pub enum Delivery {
     FocusChanged,
     CopyFailed,
     PasteFailed,
+    SessionLocked,
 }
 
 impl Delivery {
-    pub fn notice(&self) -> Option<&'static str> {
+    pub fn notice(&self, saved: bool) -> Option<&'static str> {
         match self {
             Self::Pasted => None,
             Self::FocusChanged => Some("Focus changed · text copied"),
-            Self::CopyFailed => Some("Paste failed · text in history"),
+            Self::CopyFailed if saved => Some("Paste failed · text in history"),
+            Self::CopyFailed => Some("Paste failed · text lost"),
             Self::PasteFailed => Some("Paste failed · text copied"),
+            Self::SessionLocked if saved => Some("Session locked · text in history"),
+            Self::SessionLocked => Some("Session locked · text lost"),
         }
     }
 }
@@ -59,16 +63,22 @@ impl Focus {
     }
 
     fn changed(&self, current: Option<&str>) -> bool {
-        self.hyprland && (self.address.is_none() || self.address.as_deref() != current)
+        self.hyprland && self.address.as_deref() != current
     }
 }
 
-pub fn deliver(text: &str, focus: &Focus) -> Delivery {
+pub fn deliver(text: &str, focus: &Focus, locked: impl Fn() -> bool) -> Delivery {
+    if locked() {
+        return Delivery::SessionLocked;
+    }
     if let Err(err) = copy(text) {
         eprintln!("pickscribe: copy failed: {err:#}");
         return Delivery::CopyFailed;
     }
     thread::sleep(PASTE_DELAY);
+    if locked() {
+        return Delivery::SessionLocked;
+    }
     let window = active_window();
     if focus.changed(
         window
@@ -121,14 +131,31 @@ fn paste_args(class: Option<&str>) -> Vec<&'static str> {
 
 /// Hyprland reports the focused window; other compositors fall back to Ctrl+V.
 fn active_window() -> Option<serde_json::Value> {
-    let output = Command::new("hyprctl")
+    std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE")?;
+    let output = match Command::new("hyprctl")
         .args(["activewindow", "-j"])
         .output()
-        .ok()?;
+    {
+        Ok(output) => output,
+        Err(err) => {
+            eprintln!("pickscribe: cannot read Hyprland focus: {err}");
+            return None;
+        }
+    };
     if !output.status.success() {
+        eprintln!(
+            "pickscribe: hyprctl activewindow failed with {}",
+            output.status
+        );
         return None;
     }
-    serde_json::from_slice(&output.stdout).ok()
+    match serde_json::from_slice(&output.stdout) {
+        Ok(window) => Some(window),
+        Err(_) => {
+            eprintln!("pickscribe: hyprctl activewindow returned invalid JSON");
+            None
+        }
+    }
 }
 
 fn run(program: &str, args: &[&str]) -> Result<()> {
@@ -147,45 +174,60 @@ mod tests {
     use super::*;
 
     #[test]
-    fn focus_changes_and_unreadable_hyprland_focus_skip_pasting() {
-        let focus = Focus {
-            hyprland: true,
-            address: Some("0x1".into()),
-        };
-        assert!(!focus.changed(Some("0x1")));
-        assert!(focus.changed(Some("0x2")));
-        assert!(focus.changed(None));
-        assert!(
-            Focus {
-                hyprland: true,
-                address: None
+    fn focus_guard_decision_table() {
+        for (before, after, changed) in [
+            (Some("0x1"), Some("0x1"), false),
+            (Some("0x1"), Some("0x2"), true),
+            (Some("0x1"), None, true),
+            (None, Some("0x1"), true),
+            (None, None, false),
+        ] {
+            for hyprland in [true, false] {
+                let focus = Focus {
+                    hyprland,
+                    address: before.map(str::to_string),
+                };
+                assert_eq!(focus.changed(after), hyprland && changed);
             }
-            .changed(None)
-        );
-        assert!(
-            !Focus {
-                hyprland: false,
-                address: None
-            }
-            .changed(None)
-        );
+        }
     }
 
     #[test]
     fn delivery_notices_distinguish_clipboard_failure() {
         assert_eq!(
-            Delivery::CopyFailed.notice(),
+            Delivery::CopyFailed.notice(true),
             Some("Paste failed · text in history")
         );
         assert_eq!(
-            Delivery::PasteFailed.notice(),
+            Delivery::CopyFailed.notice(false),
+            Some("Paste failed · text lost")
+        );
+        assert_eq!(
+            Delivery::PasteFailed.notice(false),
             Some("Paste failed · text copied")
         );
         assert_eq!(
-            Delivery::FocusChanged.notice(),
+            Delivery::FocusChanged.notice(false),
             Some("Focus changed · text copied")
         );
-        assert_eq!(Delivery::Pasted.notice(), None);
+        assert_eq!(Delivery::Pasted.notice(false), None);
+        assert_eq!(
+            Delivery::SessionLocked.notice(true),
+            Some("Session locked · text in history")
+        );
+        assert_eq!(
+            Delivery::SessionLocked.notice(false),
+            Some("Session locked · text lost")
+        );
+    }
+
+    #[test]
+    fn locked_delivery_never_touches_the_clipboard() {
+        let focus = Focus {
+            hyprland: false,
+            address: None,
+        };
+        assert_eq!(deliver("unused", &focus, || true), Delivery::SessionLocked);
     }
 
     #[test]

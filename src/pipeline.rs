@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use crate::audio::{self, Level, Recorder, SAMPLE_RATE};
@@ -30,6 +30,7 @@ const NO_SPEECH: &str = "No speech heard";
 
 struct Recording {
     recorder: Recorder,
+    lock: LockMonitor,
     raw: bool,
     started: Instant,
 }
@@ -70,9 +71,22 @@ impl Controller {
             let command = match &active {
                 // Reaching the length limit stops the recording as if the key was tapped.
                 Some(recording) => {
-                    match commands.recv_timeout(limit.saturating_sub(recording.started.elapsed())) {
+                    if recording.lock.locked() {
+                        active.take();
+                        self.show(UiEvent::Notice("Session locked".into()));
+                        self.hub.finished(None, false);
+                        continue;
+                    }
+                    match commands.recv_timeout(
+                        limit
+                            .saturating_sub(recording.started.elapsed())
+                            .min(Duration::from_secs(1)),
+                    ) {
                         Ok(command) => command,
-                        Err(RecvTimeoutError::Timeout) => Command::Toggle { raw: recording.raw },
+                        Err(RecvTimeoutError::Timeout) if recording.started.elapsed() >= limit => {
+                            Command::Toggle { raw: recording.raw }
+                        }
+                        Err(RecvTimeoutError::Timeout) => continue,
                         Err(RecvTimeoutError::Disconnected) => return,
                     }
                 }
@@ -99,10 +113,7 @@ impl Controller {
     }
 
     fn start(&self, raw: bool) -> Option<Recording> {
-        if session_locked() {
-            self.show(UiEvent::Notice("Session locked".into()));
-            return None;
-        }
+        let lock = LockMonitor::start(session_locked);
         match Recorder::start(self.level.clone(), self.config.max_recording_secs) {
             Ok(recorder) => {
                 self.show(UiEvent::Listening { raw });
@@ -112,6 +123,7 @@ impl Controller {
                 }
                 Some(Recording {
                     recorder,
+                    lock,
                     raw,
                     started: Instant::now(),
                 })
@@ -124,12 +136,17 @@ impl Controller {
         }
     }
 
-    fn finish(&self, recording: Recording) {
+    fn finish(&self, mut recording: Recording) {
         let stopped = Instant::now();
+        let pcm = recording.recorder.finish();
         let focus = output::Focus::capture();
+        if recording.lock.stop() {
+            self.show(UiEvent::Notice("Session locked".into()));
+            self.hub.finished(None, false);
+            return;
+        }
         self.show(UiEvent::Thinking { raw: recording.raw });
         self.hub.set_state(State::Thinking, recording.raw);
-        let pcm = recording.recorder.finish();
         let outcome = self.process(&pcm, recording.raw, stopped, &focus);
         self.show(match outcome.notice {
             Some(notice) => UiEvent::Notice(notice.into()),
@@ -169,9 +186,8 @@ impl Controller {
         let audio_ms = pcm.len() as u64 * 1000 / u64::from(SAMPLE_RATE);
         let mut item = Item::new(mode, text, transcript, audio_ms);
         item.doubtful = doubtful;
-        let delivery = output::deliver(&item.text, focus);
+        let delivery = output::deliver(&item.text, focus, session_locked);
         item.delivered = delivery == output::Delivery::Pasted;
-        let notice = delivery.notice().or(notice);
         let timings = Timings {
             audio_ms,
             transcribe_ms,
@@ -185,6 +201,7 @@ impl Controller {
             timings.total_ms
         );
         let saved = self.save(&item);
+        let notice = delivery.notice(saved).or(notice);
         if saved && mode == Mode::Ai {
             self.review_later();
         }
@@ -290,6 +307,58 @@ impl Drop for ReviewGuard {
     }
 }
 
+/// Checks beside the microphone startup and remembers any lock until recording ends.
+struct LockMonitor {
+    locked: Arc<AtomicBool>,
+    stop: mpsc::Sender<()>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl LockMonitor {
+    fn start(check: impl Fn() -> bool + Send + 'static) -> Self {
+        let locked = Arc::new(AtomicBool::new(false));
+        let state = Arc::clone(&locked);
+        let (stop, receiver) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            loop {
+                if check() {
+                    state.store(true, Ordering::SeqCst);
+                    return;
+                }
+                if receiver.recv_timeout(Duration::from_secs(1)) != Err(RecvTimeoutError::Timeout) {
+                    return;
+                }
+            }
+        });
+        Self {
+            locked,
+            stop,
+            worker: Some(worker),
+        }
+    }
+
+    fn locked(&self) -> bool {
+        self.locked.load(Ordering::SeqCst)
+    }
+
+    fn stop(&mut self) -> bool {
+        let _ = self.stop.send(());
+        if let Some(worker) = self.worker.take() {
+            // A failed check must not allow delivery from an unchecked recording.
+            if worker.join().is_err() {
+                self.locked.store(true, Ordering::SeqCst);
+            }
+        }
+        self.locked()
+    }
+}
+
+impl Drop for LockMonitor {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
 fn lock_value(program: &str, args: &[&str]) -> Option<bool> {
     let output = std::process::Command::new(program)
         .args(args)
@@ -311,16 +380,19 @@ fn parse_lock_value(value: &str) -> Option<bool> {
 }
 
 fn session_locked() -> bool {
-    session_locked_from(
-        lock_value("omarchy-shell", &["-q", "lock", "isLocked"]),
-        || {
-            let session = std::env::var("XDG_SESSION_ID").unwrap_or_else(|_| "self".into());
-            lock_value(
-                "loginctl",
-                &["show-session", &session, "--property=LockedHint", "--value"],
-            )
-        },
-    )
+    session_locked_from(lock_value("omarchy-shell", &["lock", "isLocked"]), || {
+        let session = logind_session(std::env::var("XDG_SESSION_ID").ok());
+        lock_value(
+            "loginctl",
+            &["show-session", &session, "--property=LockedHint", "--value"],
+        )
+    })
+}
+
+fn logind_session(session: Option<String>) -> String {
+    session
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| "auto".into())
 }
 
 fn session_locked_from(omarchy: Option<bool>, logind: impl FnOnce() -> Option<bool>) -> bool {
@@ -387,5 +459,43 @@ mod tests {
         assert_eq!(parse_lock_value("no"), Some(false));
         assert_eq!(parse_lock_value(""), None);
         assert_eq!(parse_lock_value("error"), None);
+    }
+
+    #[test]
+    fn logind_uses_auto_without_a_session_id() {
+        assert_eq!(logind_session(None), "auto");
+        assert_eq!(logind_session(Some(String::new())), "auto");
+        assert_eq!(logind_session(Some("7".into())), "7");
+    }
+
+    #[test]
+    fn lock_monitor_starts_without_waiting_and_checks_before_finishing() {
+        let (entered, started) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        let mut monitor = LockMonitor::start(move || {
+            entered.send(()).unwrap();
+            wait.recv().unwrap()
+        });
+        started.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(!monitor.locked());
+        release.send(true).unwrap();
+        assert!(monitor.stop());
+        assert!(monitor.locked());
+    }
+
+    #[test]
+    fn lock_monitor_cancels_when_the_session_locks_during_recording() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let checks = Arc::clone(&calls);
+        let (checked, replies) = mpsc::channel();
+        let mut monitor = LockMonitor::start(move || {
+            let locked = checks.fetch_add(1, Ordering::SeqCst) > 0;
+            checked.send(locked).unwrap();
+            locked
+        });
+        assert!(!replies.recv_timeout(Duration::from_secs(2)).unwrap());
+        assert!(replies.recv_timeout(Duration::from_secs(2)).unwrap());
+        assert!(monitor.stop());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }

@@ -22,7 +22,7 @@ On Omarchy the capsule takes its colors from the current theme. Elsewhere it use
 
 ## Requirements
 
-PickScribe needs Wayland with wlr-layer-shell support: Hyprland, other wlroots compositors, or KDE. It reads the focused window from Hyprland to choose the paste shortcut; on other compositors it always pastes with Ctrl+V.
+PickScribe needs Wayland with wlr-layer-shell support: Hyprland, other wlroots compositors, or KDE. It reads the focused window from Hyprland to choose the paste shortcut; on other compositors it always pastes with Ctrl+V. The focus guard only runs on Hyprland.
 
 On Arch Linux:
 
