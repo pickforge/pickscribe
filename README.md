@@ -36,10 +36,12 @@ You also need a Vulkan driver for your GPU, such as `vulkan-radeon` for AMD.
 ## Install
 
 ```bash
+git clone https://github.com/pickforge/pickscribe
+cd pickscribe
 scripts/install
 ```
 
-The script builds PickScribe, downloads the Whisper `large-v3-turbo` model (1.6 GB, checked against its SHA-256), installs `~/.local/bin/pickscribe`, and starts it as the `pickscribe` systemd user service.
+The script builds PickScribe, downloads the Whisper `large-v3-turbo` model (1.6 GB, checked against its SHA-256), installs `~/.local/bin/pickscribe`, and starts it as the `pickscribe` systemd user service. Run it again after `git pull` to update.
 
 For AI cleanup, create an Anthropic API key in the [Anthropic console](https://console.anthropic.com/). A dedicated key with a low spend limit is safest. Put it in `~/.config/pickscribe/env`:
 
@@ -104,6 +106,10 @@ PickScribe also looks for misheard words on its own. After every 10 AI dictation
 
 PickScribe keeps your recent dictations, so text is not lost when no text field had focus. `pickscribe history` lists them, and `pickscribe history copy ID` puts one back on the clipboard. `pickscribe history delete ID` and `pickscribe history clear` remove them.
 
+## Omarchy
+
+On Omarchy, `scripts/install` also installs a bar widget. Enable it once with `omarchy plugin enable pickforge.pickscribe`. The icon shows whether PickScribe is listening or thinking. Its panel holds the history, the dictionary, the suggested corrections, and the timings of recent dictations.
+
 ## Commands
 
 ```bash
@@ -133,4 +139,12 @@ cargo test
 
 ## License
 
-MIT
+MIT © 2026 Pickforge Studio
+
+---
+
+<p align="center">
+  <a href="https://pickforge.dev">
+    <img src="assets/branding/pickforge-studio-footer.svg" alt="Pickforge Studio" width="560">
+  </a>
+</p>

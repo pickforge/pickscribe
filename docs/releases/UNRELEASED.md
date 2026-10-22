@@ -29,10 +29,11 @@ then reset this file.
 - Unit tests for the shortcut tracker, settings, cleanup request and response, paste shortcut choice, resampling, the capsule animation and theme, the dictionary, history, status stream, and MCP server.
 - Transcription of the whisper.cpp JFK sample on an RX 9070 through Vulkan.
 - Daemon start, single-instance guard, capsule display on Hyprland, and cancel.
+- Daily dictation with cleanup on Hyprland since 2026-10-18: 28 dictations, all pasted.
 
 ### Not tested yet
 
-- Live dictation in Portuguese and English with cleanup.
+- Live dictation in English.
 - Paste into terminals and Electron apps.
 
 ### Release blockers
