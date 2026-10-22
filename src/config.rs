@@ -92,7 +92,7 @@ pub fn api_key() -> Option<String> {
 }
 
 fn env_file_value(text: &str, name: &str) -> Option<String> {
-    text.lines().find_map(|line| {
+    text.lines().rev().find_map(|line| {
         let line = line.trim();
         let line = line.strip_prefix("export ").unwrap_or(line);
         let (key, value) = line.split_once('=')?;
@@ -170,6 +170,22 @@ mod tests {
         assert!(Config::parse("cleanup_effort = \"max\"").is_err());
         assert!(Config::parse("cleanup_effort = \"max\"\ncleanup_thinking = true").is_ok());
         assert!(Config::parse("cleanup_effort = \"high\"").is_ok());
+    }
+
+    #[test]
+    fn last_env_file_assignment_wins() {
+        assert_eq!(
+            env_file_value(
+                "ANTHROPIC_API_KEY=old\nexport ANTHROPIC_API_KEY='new'\nOTHER=x",
+                API_KEY_VAR
+            )
+            .as_deref(),
+            Some("new")
+        );
+        assert_eq!(
+            env_file_value("ANTHROPIC_API_KEY=old\nANTHROPIC_API_KEY=", API_KEY_VAR).as_deref(),
+            Some("")
+        );
     }
 
     #[test]

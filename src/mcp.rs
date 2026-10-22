@@ -123,9 +123,7 @@ fn call(name: &Value, args: &Value) -> Value {
 }
 
 fn edit(change: impl FnOnce(&mut Dictionary) -> Result<String>) -> Result<String> {
-    let mut dictionary = Dictionary::load()?;
-    let message = change(&mut dictionary)?;
-    dictionary.save()?;
+    let message = Dictionary::edit(change)?;
     control::notify_dictionary_changed();
     Ok(message)
 }

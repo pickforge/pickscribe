@@ -32,7 +32,7 @@ not confident about. Never report a word only because it is informal.
 Each `heard` is only the misheard word or words, never the words around them, and must \
 appear exactly so in the heard text. `meant` is the spelling \
 the user most likely said. Reply with a JSON array only, without commentary: \
-[{\"heard\": \"...\", \"meant\": \"...\", \"reason\": \"a few words\"}]. Reply [] when nothing \
+[{\"heard\": \"...\", \"meant\": \"...\"}]. Reply [] when nothing \
 looks wrong.";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -40,9 +40,9 @@ pub struct Suggestion {
     pub id: String,
     pub heard: String,
     pub meant: String,
-    pub reason: String,
-    /// Where the word appeared, so the user can judge it.
-    pub example: String,
+    /// The history entry that supplies context while it still exists.
+    #[serde(default)]
+    pub history_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,12 +66,31 @@ fn path() -> PathBuf {
     config::data_dir().join("suggestions.json")
 }
 
-fn load() -> Result<Store> {
+fn read_store() -> Result<Store> {
     match std::fs::read_to_string(path()) {
         Ok(text) => Ok(serde_json::from_str(&text).unwrap_or_default()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Store::default()),
         Err(err) => Err(err).context("cannot read suggestions"),
     }
+}
+
+fn load() -> Result<Store> {
+    // Rewriting old stores drops the former transcript excerpts and model explanations.
+    let text = match std::fs::read_to_string(path()) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Store::default()),
+        Err(err) => return Err(err).context("cannot read suggestions"),
+    };
+    let value: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+    if value["pending"].as_array().is_some_and(|pending| {
+        pending
+            .iter()
+            .any(|s| s.get("example").is_some() || s.get("reason").is_some())
+    }) {
+        edit(|_| Ok(()))?;
+        return read_store();
+    }
+    Ok(serde_json::from_value(value).unwrap_or_default())
 }
 
 /// Applies `change` under a lock, so the daemon and the CLI never overwrite each other.
@@ -80,7 +99,7 @@ fn edit<T>(change: impl FnOnce(&mut Store) -> Result<T>) -> Result<T> {
     std::fs::create_dir_all(&dir)?;
     let lock = File::create(dir.join("suggestions.lock"))?;
     lock.lock()?;
-    let mut store = load()?;
+    let mut store = read_store()?;
     let value = change(&mut store)?;
     config::write_private(&path(), serde_json::to_string_pretty(&store)?.as_bytes())?;
     Ok(value)
@@ -90,19 +109,52 @@ pub fn pending() -> Result<Vec<Suggestion>> {
     Ok(load()?.pending)
 }
 
-/// AI dictations newer than the last review, oldest first.
-pub fn unreviewed(items: &[Item]) -> Result<Vec<Item>> {
-    let through = load()?.reviewed_through.parse::<u128>().unwrap_or(0);
-    Ok(newer_ai(items, through))
+#[derive(Serialize)]
+pub struct SuggestionContext {
+    #[serde(flatten)]
+    pub suggestion: Suggestion,
+    pub context: String,
 }
 
-fn newer_ai(items: &[Item], through: u128) -> Vec<Item> {
+pub fn pending_with_context() -> Result<Vec<SuggestionContext>> {
+    let items = history::load()?;
+    Ok(pending()?
+        .into_iter()
+        .map(|suggestion| {
+            let context = suggestion_context(&suggestion, &items);
+            SuggestionContext {
+                suggestion,
+                context,
+            }
+        })
+        .collect())
+}
+
+fn suggestion_context(suggestion: &Suggestion, items: &[Item]) -> String {
     items
         .iter()
+        .find(|item| item.id == suggestion.history_id)
+        .map(|item| excerpt(&item.transcript, &suggestion.heard))
+        .unwrap_or_default()
+}
+
+/// AI dictations newer than the last review, oldest first.
+pub fn unreviewed(items: &[Item], limit: usize) -> Result<Vec<Item>> {
+    let through = load()?.reviewed_through.parse::<u128>().unwrap_or(0);
+    Ok(newer_ai(items, through, limit))
+}
+
+fn newer_ai(items: &[Item], through: u128, limit: usize) -> Vec<Item> {
+    let mut due: Vec<Item> = items
+        .iter()
+        .rev()
         .filter(|item| item.mode == Mode::Ai)
         .filter(|item| item.id.parse::<u128>().unwrap_or(0) > through)
+        .take(limit)
         .cloned()
-        .collect()
+        .collect();
+    due.reverse();
+    due
 }
 
 /// Reviews `items` and stores what it finds. Returns only the new suggestions.
@@ -159,15 +211,17 @@ fn request_body(config: &Config, dictionary: &Dictionary, items: &[Item]) -> Val
 struct Found {
     heard: String,
     meant: String,
-    #[serde(default)]
-    reason: String,
 }
 
 fn parse_reply(reply: &str) -> Result<Vec<Found>> {
     let (Some(start), Some(end)) = (reply.find('['), reply.rfind(']')) else {
         bail!("the review reply held no JSON array");
     };
-    serde_json::from_str(&reply[start..=end]).context("the review reply was not valid JSON")
+    if start > end {
+        bail!("the review reply held no JSON array");
+    }
+    serde_json::from_str(&reply[start..=end])
+        .map_err(|_| anyhow::anyhow!("the review reply was not valid JSON"))
 }
 
 /// Keeps only findings that are real words in the dictations and new to the user.
@@ -196,11 +250,10 @@ fn accept_found(
         {
             continue;
         }
-        let Some(example) = items
+        let Some(item) = items
             .iter()
             .rev()
             .find(|item| dictionary::contains_word(&item.transcript, &heard))
-            .map(|item| excerpt(&item.transcript, &heard))
         else {
             continue;
         };
@@ -212,8 +265,7 @@ fn accept_found(
             ),
             heard,
             meant: entry.text,
-            reason: finding.reason.trim().to_string(),
-            example,
+            history_id: item.id.clone(),
         });
         if fresh.len() == MAX_SUGGESTIONS {
             break;
@@ -266,7 +318,7 @@ pub fn run_due(client: &cleanup::Client, config: &Config, hub: &Arc<Hub>) {
     let Some(key) = config::api_key() else {
         return;
     };
-    let due = match history::load().and_then(|items| unreviewed(&items)) {
+    let due = match history::load().and_then(|items| unreviewed(&items, config.review_every)) {
         Ok(due) if due.len() >= config.review_every => due,
         Ok(_) => return,
         Err(err) => {
@@ -278,7 +330,9 @@ pub fn run_due(client: &cleanup::Client, config: &Config, hub: &Arc<Hub>) {
         Ok(fresh) if fresh.is_empty() => {}
         Ok(fresh) => {
             hub.suggestions_changed();
-            fresh.iter().for_each(announce);
+            for _ in fresh {
+                announce();
+            }
         }
         // The dictations stay unreviewed, so the next one retries.
         Err(err) => eprintln!("pickscribe: review failed: {err:#}"),
@@ -287,12 +341,7 @@ pub fn run_due(client: &cleanup::Client, config: &Config, hub: &Arc<Hub>) {
 
 /// Tells the user about a suggestion. Clicking the notification opens the PickScribe panel on
 /// Omarchy, where the user adds or ignores it; a stray click never changes the dictionary.
-pub fn announce(suggestion: &Suggestion) {
-    let title = format!("Did you mean \u{201c}{}\u{201d}?", suggestion.meant);
-    let body = escape_markup(&format!(
-        "Heard \u{201c}{}\u{201d} in: {}",
-        suggestion.heard, suggestion.example
-    ));
+pub fn announce() {
     std::thread::spawn(move || {
         let clicked = Command::new("notify-send")
             .args([
@@ -300,8 +349,8 @@ pub fn announce(suggestion: &Suggestion) {
                 "--icon=audio-input-microphone-symbolic",
                 "--action=default=Review",
                 "--wait",
-                &title,
-                &body,
+                "Dictionary suggestion",
+                "Open PickScribe to review a possible correction.",
             ])
             .output()
             .is_ok_and(|out| String::from_utf8_lossy(&out.stdout).trim() == "default");
@@ -313,20 +362,31 @@ pub fn announce(suggestion: &Suggestion) {
     });
 }
 
-/// Notification bodies may be read as markup.
-fn escape_markup(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
 /// Adds the suggestion to the dictionary as a correction.
 pub fn accept(id: &str) -> Result<Suggestion> {
-    let suggestion = edit(|store| take(store, id))?;
-    let mut dictionary = Dictionary::load()?;
-    dictionary.add(Entry::new(&suggestion.meant, Some(&suggestion.heard))?);
-    dictionary.save()?;
-    Ok(suggestion)
+    edit(|store| {
+        accept_saved(store, id, |suggestion| {
+            let entry = Entry::new(&suggestion.meant, Some(&suggestion.heard))?;
+            Dictionary::edit(|dictionary| {
+                dictionary.add(entry);
+                Ok(())
+            })
+        })
+    })
+}
+
+fn accept_saved(
+    store: &mut Store,
+    id: &str,
+    save: impl FnOnce(&Suggestion) -> Result<()>,
+) -> Result<Suggestion> {
+    let suggestion = store
+        .pending
+        .iter()
+        .find(|s| s.id == id)
+        .with_context(|| format!("no suggestion with id {id}"))?;
+    save(suggestion)?;
+    take(store, id)
 }
 
 /// Drops the suggestion and remembers not to suggest it again.
@@ -369,6 +429,63 @@ mod tests {
     }
 
     #[test]
+    fn malformed_arrays_never_panic() {
+        for reply in [
+            "][",
+            "] stray [",
+            "[",
+            "]",
+            "[invalid]",
+            "[{}]",
+            "[\"private words\"]",
+        ] {
+            let error = parse_reply(reply).err().expect("invalid reply");
+            assert!(!format!("{error:#}").contains("private words"));
+        }
+        assert!(parse_reply("[]").unwrap().is_empty());
+    }
+
+    #[test]
+    fn failed_dictionary_save_keeps_the_suggestion() {
+        let mut store = Store {
+            pending: vec![Suggestion {
+                id: "1".into(),
+                heard: "Bitforge".into(),
+                meant: "Pickforge".into(),
+                history_id: "1".into(),
+            }],
+            ..Store::default()
+        };
+        assert!(accept_saved(&mut store, "1", |_| bail!("save failed")).is_err());
+        assert_eq!(store.pending.len(), 1);
+        accept_saved(&mut store, "1", |_| Ok(())).unwrap();
+        assert!(store.pending.is_empty());
+    }
+
+    #[test]
+    fn stored_suggestions_discard_legacy_transcript_fields() {
+        let store: Store = serde_json::from_value(json!({ "pending": [{
+            "id": "1", "heard": "word", "meant": "term", "example": "private transcript", "reason": "private explanation"
+        }]})).unwrap();
+        let saved = serde_json::to_string(&store).unwrap();
+        assert!(!saved.contains("private"));
+        assert!(!saved.contains("example"));
+        assert!(!saved.contains("reason"));
+    }
+
+    #[test]
+    fn retries_only_use_the_newest_due_items() {
+        let items = [
+            item("1", Mode::Ai, "a"),
+            item("2", Mode::Raw, "b"),
+            item("3", Mode::Ai, "c"),
+            item("4", Mode::Ai, "d"),
+        ];
+        let picked: Vec<_> = newer_ai(&items, 0, 2).into_iter().map(|i| i.id).collect();
+        assert_eq!(picked, ["3", "4"]);
+    }
+
+    #[test]
     fn findings_must_be_in_the_text_and_new() {
         let store = Store {
             rejected: vec![Pair {
@@ -383,28 +500,29 @@ mod tests {
             Found {
                 heard: "pix scribe".into(),
                 meant: "PickScribe".into(),
-                reason: String::new(),
             },
             Found {
                 heard: "Candeia".into(),
                 meant: "Candeeiro".into(),
-                reason: String::new(),
             },
             Found {
                 heard: "Bitforge".into(),
                 meant: "Pickforge".into(),
-                reason: String::new(),
             },
             Found {
                 heard: "pix scribe".into(),
                 meant: "PickScribe".into(),
-                reason: String::new(),
             },
         ];
         let fresh = accept_found(&store, &dictionary, &items, found);
         assert_eq!(fresh.len(), 1);
         assert_eq!(fresh[0].heard, "pix scribe");
-        assert_eq!(fresh[0].example, "o pix scribe e a Candeia");
+        assert_eq!(fresh[0].history_id, "1");
+        assert_eq!(
+            suggestion_context(&fresh[0], &items),
+            "o pix scribe e a Candeia"
+        );
+        assert_eq!(suggestion_context(&fresh[0], &[]), "");
     }
 
     #[test]
@@ -414,7 +532,7 @@ mod tests {
             item("6", Mode::Raw, "b"),
             item("7", Mode::Ai, "c"),
         ];
-        let picked: Vec<String> = newer_ai(&items, 5).into_iter().map(|i| i.id).collect();
+        let picked: Vec<String> = newer_ai(&items, 5, 10).into_iter().map(|i| i.id).collect();
         assert_eq!(picked, ["7"]);
     }
 

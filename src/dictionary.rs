@@ -2,7 +2,8 @@
 //! `~/.config/pickscribe/dictionary.txt` holds a term (`Pickforge`) or a correction
 //! (`Bitforge -> Pickforge`). The file is read for every dictation, so edits apply at once.
 
-use std::path::PathBuf;
+use std::fs::File;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
@@ -42,6 +43,9 @@ impl Entry {
 }
 
 fn clean_field(value: &str, name: &str) -> Result<String> {
+    if value.chars().any(char::is_control) {
+        bail!("the {name} cannot contain control characters");
+    }
     let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
     if value.is_empty() {
         bail!("the {name} is empty");
@@ -62,8 +66,11 @@ pub struct Dictionary {
 
 impl Dictionary {
     pub fn load() -> Result<Self> {
-        let path = path();
-        match std::fs::read_to_string(&path) {
+        Self::load_at(&path())
+    }
+
+    fn load_at(path: &Path) -> Result<Self> {
+        match std::fs::read_to_string(path) {
             Ok(text) => Ok(Self::parse(&text)),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(err) => Err(err).with_context(|| format!("cannot read {}", path.display())),
@@ -74,8 +81,7 @@ impl Dictionary {
     fn parse(text: &str) -> Self {
         let entries = text
             .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .filter(|line| !line.trim().is_empty() && !line.trim().starts_with('#'))
             .filter_map(|line| match line.split_once(ARROW) {
                 Some((heard, text)) => Entry::new(text, Some(heard)).ok(),
                 None => Entry::new(line, None).ok(),
@@ -84,8 +90,7 @@ impl Dictionary {
         Self { entries }
     }
 
-    pub fn save(&self) -> Result<()> {
-        let path = path();
+    fn save(&self, path: &Path) -> Result<()> {
         let mut text = String::from(
             "# PickScribe dictionary: one term per line, or \"heard -> meant\" for a correction.\n",
         );
@@ -93,7 +98,22 @@ impl Dictionary {
             text.push_str(&entry.line());
             text.push('\n');
         }
-        config::write_private(&path, text.as_bytes())
+        config::write_private(path, text.as_bytes())
+    }
+
+    /// Locks the whole edit so all dictionary writers keep each other's entries.
+    pub fn edit<T>(change: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        Self::edit_at(&path(), change)
+    }
+
+    fn edit_at<T>(path: &Path, change: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        std::fs::create_dir_all(path.parent().context("dictionary path has no parent")?)?;
+        let lock = File::create(path.with_extension("lock"))?;
+        lock.lock()?;
+        let mut dictionary = Self::load_at(path)?;
+        let value = change(&mut dictionary)?;
+        dictionary.save(path)?;
+        Ok(value)
     }
 
     /// Returns false when the entry was already there.
@@ -203,6 +223,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn concurrent_edits_keep_all_entries() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("dictionary-test-{}", std::process::id()));
+        let path = dir.join("dictionary.txt");
+        std::thread::scope(|scope| {
+            for i in 0..12 {
+                let path = &path;
+                scope.spawn(move || {
+                    Dictionary::edit_at(path, |d| {
+                        d.add(Entry::new(&format!("term{i}"), None)?);
+                        Ok(())
+                    })
+                    .unwrap()
+                });
+            }
+        });
+        assert_eq!(Dictionary::load_at(&path).unwrap().entries.len(), 12);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn parses_terms_and_corrections_and_skips_bad_lines() {
         let dictionary = Dictionary::parse(
             "# comment\nPickforge\n  Bitforge ->  Pickforge \n -> Empty\n\nProva   Clara\n",
@@ -253,6 +295,17 @@ mod tests {
 
     #[test]
     fn invalid_entries_are_rejected() {
+        for control in ['\0', '\n', '\r', '\t', '\u{7f}', '\u{85}'] {
+            let value = format!("a{control}b");
+            assert!(Entry::new(&value, None).is_err());
+            assert!(Entry::new("term", Some(&value)).is_err());
+        }
+        assert!(
+            Dictionary::parse("bad\0term\n\tBad\nBad\t\nGood")
+                .entries
+                .iter()
+                .all(|e| e.text == "Good")
+        );
         assert!(Entry::new("  ", None).is_err());
         assert!(Entry::new("a -> b", None).is_err());
         assert!(Entry::new("Pickforge", Some("pickforge")).is_err());

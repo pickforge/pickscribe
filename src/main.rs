@@ -168,7 +168,7 @@ fn daemon() -> Result<()> {
     let config = Config::load()?;
     let hub = Arc::new(Hub::default());
     let (commands, receiver) = mpsc::channel();
-    control::listen(commands.clone(), Arc::clone(&hub))?;
+    let _instance_lock = control::listen(commands.clone(), Arc::clone(&hub))?;
     let transcriber = Transcriber::load(&config)?;
     hotkey::spawn(commands);
     let (ui, events) = async_channel::unbounded();
@@ -227,7 +227,7 @@ fn history_command(action: Option<HistoryAction>, json: bool) -> Result<()> {
 }
 
 fn dict_command(action: Option<DictAction>, json: bool) -> Result<()> {
-    let mut dictionary = Dictionary::load()?;
+    let dictionary = Dictionary::load()?;
     match action {
         None if json => println!("{}", serde_json::to_string(&dictionary.entries)?),
         None => {
@@ -239,15 +239,21 @@ fn dict_command(action: Option<DictAction>, json: bool) -> Result<()> {
             }
         }
         Some(DictAction::Add { text, heard }) => {
-            dictionary.add(Entry::new(&text, heard.as_deref())?);
-            dictionary.save()?;
+            let entry = Entry::new(&text, heard.as_deref())?;
+            Dictionary::edit(|dictionary| {
+                dictionary.add(entry);
+                Ok(())
+            })?;
             control::notify_dictionary_changed();
         }
         Some(DictAction::Remove { text, heard }) => {
-            if !dictionary.remove(&Entry::new(&text, heard.as_deref())?) {
-                bail!("no such dictionary entry");
-            }
-            dictionary.save()?;
+            let entry = Entry::new(&text, heard.as_deref())?;
+            Dictionary::edit(|dictionary| {
+                if !dictionary.remove(&entry) {
+                    bail!("no such dictionary entry");
+                }
+                Ok(())
+            })?;
             control::notify_dictionary_changed();
         }
     }
@@ -256,10 +262,16 @@ fn dict_command(action: Option<DictAction>, json: bool) -> Result<()> {
 
 fn suggestions_command(action: Option<SuggestionAction>, json: bool) -> Result<()> {
     match action {
-        None if json => println!("{}", serde_json::to_string(&review::pending()?)?),
+        None if json => println!(
+            "{}",
+            serde_json::to_string(&review::pending_with_context()?)?
+        ),
         None => {
-            for s in review::pending()? {
-                println!("{}\t{} -> {}\t{}", s.id, s.heard, s.meant, s.example);
+            for s in review::pending_with_context()? {
+                println!(
+                    "{}\t{} -> {}\t{}",
+                    s.suggestion.id, s.suggestion.heard, s.suggestion.meant, s.context
+                );
             }
         }
         Some(SuggestionAction::Accept { id }) => {
@@ -278,7 +290,7 @@ fn review_now() -> Result<()> {
     let config = Config::load()?;
     let key = config::api_key()
         .context("no ANTHROPIC_API_KEY in ~/.config/pickscribe/env or the environment")?;
-    let due = review::unreviewed(&history::load()?)?;
+    let due = review::unreviewed(&history::load()?, config.review_every.max(1))?;
     if due.is_empty() {
         println!("No new AI dictations to review.");
         return Ok(());
@@ -291,7 +303,7 @@ fn review_now() -> Result<()> {
         fresh.len()
     );
     for s in fresh {
-        println!("{}\t{} -> {}\t{}", s.id, s.heard, s.meant, s.reason);
+        println!("{}\t{} -> {}", s.id, s.heard, s.meant);
     }
     Ok(())
 }
@@ -306,7 +318,7 @@ fn transcribe_file(path: &Path, clean: bool) -> Result<()> {
     let started = Instant::now();
     let heard = transcriber.transcribe(&pcm, &dictionary.terms())?;
     if !heard.doubtful.is_empty() {
-        eprintln!("pickscribe: unsure about {}", heard.doubtful.join(", "));
+        eprintln!("pickscribe: unsure about {} words", heard.doubtful.len());
     }
     let text = dictionary.apply(&heard.text);
     eprintln!(
