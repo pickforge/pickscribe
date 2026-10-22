@@ -34,6 +34,13 @@ impl Entry {
         Ok(Self { text, heard })
     }
 
+    fn parse(line: &str) -> Option<Self> {
+        match line.split_once(ARROW) {
+            Some((heard, text)) => Self::new(text, Some(heard)).ok(),
+            None => Self::new(line, None).ok(),
+        }
+    }
+
     fn line(&self) -> String {
         match &self.heard {
             Some(heard) => format!("{heard} {ARROW} {}", self.text),
@@ -79,22 +86,33 @@ impl Dictionary {
 
     /// Lines that do not parse are skipped, so a typo never stops dictation.
     fn parse(text: &str) -> Self {
-        let entries = text
-            .lines()
-            .filter(|line| !line.trim().is_empty() && !line.trim().starts_with('#'))
-            .filter_map(|line| match line.split_once(ARROW) {
-                Some((heard, text)) => Entry::new(text, Some(heard)).ok(),
-                None => Entry::new(line, None).ok(),
-            })
-            .collect();
+        let entries = text.lines().filter_map(Entry::parse).collect();
         Self { entries }
     }
 
     fn save(&self, path: &Path) -> Result<()> {
-        let mut text = String::from(
-            "# PickScribe dictionary: one term per line, or \"heard -> meant\" for a correction.\n",
-        );
-        for entry in &self.entries {
+        let original = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::from(
+                "# PickScribe dictionary: one term per line, or \"heard -> meant\" for a correction.\n",
+            ),
+            Err(err) => return Err(err).context("cannot read dictionary"),
+        };
+        let mut remaining = self.entries.clone();
+        let mut text = String::new();
+        for line in original.split_inclusive('\n') {
+            if let Some(entry) = Entry::parse(line) {
+                let Some(index) = remaining.iter().position(|e| e == &entry) else {
+                    continue;
+                };
+                remaining.remove(index);
+            }
+            text.push_str(line);
+        }
+        for entry in remaining {
+            if !text.is_empty() && !text.ends_with('\n') {
+                text.push('\n');
+            }
             text.push_str(&entry.line());
             text.push('\n');
         }
@@ -111,8 +129,11 @@ impl Dictionary {
         let lock = File::create(path.with_extension("lock"))?;
         lock.lock()?;
         let mut dictionary = Self::load_at(path)?;
+        let original = dictionary.clone();
         let value = change(&mut dictionary)?;
-        dictionary.save(path)?;
+        if dictionary != original {
+            dictionary.save(path)?;
+        }
         Ok(value)
     }
 
@@ -241,6 +262,61 @@ mod tests {
             }
         });
         assert_eq!(Dictionary::load_at(&path).unwrap().entries.len(), 12);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn edits_preserve_rejected_lines_comments_and_spacing() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("dictionary-round-trip-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("dictionary.txt");
+        let rejected = format!("# my terms\r\na -> b -> c\n{} -> term\n\n", "x".repeat(101));
+        let original = format!("  Pickforge  \n{rejected}Bitforge -> Pickforge\n# last comment");
+        std::fs::write(&path, &original).unwrap();
+        Dictionary::edit_at(&path, |dictionary| {
+            assert!(dictionary.add(Entry::new("New term", None)?));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            format!("{original}\nNew term\n")
+        );
+        Dictionary::edit_at(&path, |dictionary| {
+            assert!(dictionary.remove(&Entry::new("Pickforge", Some("Bitforge"))?));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            format!("  Pickforge  \n{rejected}# last comment\nNew term\n")
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unchanged_edits_do_not_replace_the_dictionary_file() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("dictionary-noop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("dictionary.txt");
+        let original = "# user comment\na -> b -> c\n  Pickforge  ";
+        std::fs::write(&path, original).unwrap();
+        let before = std::fs::metadata(&path).unwrap();
+        Dictionary::edit_at(&path, |dictionary| {
+            assert!(!dictionary.add(Entry::new("pickforge", None)?));
+            assert!(!dictionary.remove(&Entry::new("Absent", None)?));
+            Ok(())
+        })
+        .unwrap();
+        let after = std::fs::metadata(&path).unwrap();
+        assert_eq!(before.ino(), after.ino());
+        assert_eq!(before.modified().unwrap(), after.modified().unwrap());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
