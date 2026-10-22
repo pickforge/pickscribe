@@ -28,7 +28,7 @@ pub enum Delivery {
     FocusChanged,
     CopyFailed,
     PasteFailed,
-    SessionLocked,
+    SessionLocked { copied: bool },
 }
 
 impl Delivery {
@@ -39,12 +39,16 @@ impl Delivery {
             Self::CopyFailed if saved => Some("Paste failed · text in history"),
             Self::CopyFailed => Some("Paste failed · text lost"),
             Self::PasteFailed => Some("Paste failed · text copied"),
-            Self::SessionLocked if saved => Some("Session locked · text in history"),
-            Self::SessionLocked => Some("Session locked · text lost"),
+            Self::SessionLocked { copied: true } => Some("Session locked · text copied"),
+            Self::SessionLocked { copied: false } if saved => {
+                Some("Session locked · text in history")
+            }
+            Self::SessionLocked { copied: false } => Some("Session locked · text lost"),
         }
     }
 }
 
+#[derive(Default)]
 pub struct Focus {
     hyprland: bool,
     address: Option<String>,
@@ -67,28 +71,63 @@ impl Focus {
     }
 }
 
-pub fn deliver(text: &str, focus: &Focus, locked: impl Fn() -> bool) -> Delivery {
-    if locked() {
-        return Delivery::SessionLocked;
+pub fn deliver(
+    text: &str,
+    focus: &Focus,
+    latched: impl Fn() -> bool,
+    locked: impl Fn() -> bool,
+) -> Delivery {
+    deliver_with(
+        text,
+        latched,
+        |text| {
+            copy(text)?;
+            thread::sleep(PASTE_DELAY);
+            Ok(())
+        },
+        || paste_with(focus, locked, active_window, |args| run("wtype", args)),
+    )
+}
+
+fn deliver_with(
+    text: &str,
+    latched: impl Fn() -> bool,
+    copy: impl FnOnce(&str) -> Result<()>,
+    paste: impl FnOnce() -> Delivery,
+) -> Delivery {
+    if latched() {
+        return Delivery::SessionLocked { copied: false };
     }
     if let Err(err) = copy(text) {
         eprintln!("pickscribe: copy failed: {err:#}");
         return Delivery::CopyFailed;
     }
-    thread::sleep(PASTE_DELAY);
-    if locked() {
-        return Delivery::SessionLocked;
-    }
-    let window = active_window();
+    paste()
+}
+
+fn paste_with(
+    focus: &Focus,
+    locked: impl Fn() -> bool,
+    window: impl FnOnce() -> Option<serde_json::Value>,
+    dispatch: impl FnOnce(&[&str]) -> Result<()>,
+) -> Delivery {
+    let window = window();
     if focus.changed(
         window
             .as_ref()
             .and_then(|window| window["address"].as_str()),
     ) {
-        return Delivery::FocusChanged;
+        return if locked() {
+            Delivery::SessionLocked { copied: true }
+        } else {
+            Delivery::FocusChanged
+        };
     }
     let args = paste_args(window.as_ref().and_then(|window| window["class"].as_str()));
-    match run("wtype", &args) {
+    if locked() {
+        return Delivery::SessionLocked { copied: true };
+    }
+    match dispatch(&args) {
         Ok(()) => Delivery::Pasted,
         Err(err) => {
             eprintln!("pickscribe: paste failed: {err:#}");
@@ -212,11 +251,11 @@ mod tests {
         );
         assert_eq!(Delivery::Pasted.notice(false), None);
         assert_eq!(
-            Delivery::SessionLocked.notice(true),
+            Delivery::SessionLocked { copied: false }.notice(true),
             Some("Session locked · text in history")
         );
         assert_eq!(
-            Delivery::SessionLocked.notice(false),
+            Delivery::SessionLocked { copied: false }.notice(false),
             Some("Session locked · text lost")
         );
     }
@@ -227,7 +266,102 @@ mod tests {
             hyprland: false,
             address: None,
         };
-        assert_eq!(deliver("unused", &focus, || true), Delivery::SessionLocked);
+        assert_eq!(
+            deliver("unused", &focus, || true, || panic!("unexpected check")),
+            Delivery::SessionLocked { copied: false }
+        );
+    }
+
+    #[test]
+    fn delivery_checks_after_focus_and_immediately_before_dispatch() {
+        let steps = std::cell::RefCell::new(Vec::new());
+        let focus = Focus {
+            hyprland: true,
+            address: Some("0x1".into()),
+        };
+        let delivery = deliver_with(
+            "dictation",
+            || {
+                steps.borrow_mut().push("latch");
+                false
+            },
+            |_| {
+                steps.borrow_mut().push("copy");
+                Ok(())
+            },
+            || {
+                paste_with(
+                    &focus,
+                    || {
+                        steps.borrow_mut().push("lock");
+                        false
+                    },
+                    || {
+                        steps.borrow_mut().push("focus");
+                        Some(serde_json::json!({"address": "0x1", "class": "kitty"}))
+                    },
+                    |args| {
+                        steps.borrow_mut().push("dispatch");
+                        assert!(args.contains(&"shift"));
+                        Ok(())
+                    },
+                )
+            },
+        );
+        assert_eq!(delivery, Delivery::Pasted);
+        assert_eq!(
+            *steps.borrow(),
+            ["latch", "copy", "focus", "lock", "dispatch"]
+        );
+    }
+
+    #[test]
+    fn lock_during_focus_query_prevents_dispatch_and_reports_the_clipboard() {
+        let locked = std::cell::Cell::new(false);
+        let copied = std::cell::Cell::new(false);
+        let focus = Focus {
+            hyprland: true,
+            address: Some("0x1".into()),
+        };
+        let delivery = deliver_with(
+            "dictation",
+            || false,
+            |_| {
+                copied.set(true);
+                Ok(())
+            },
+            || {
+                paste_with(
+                    &focus,
+                    || locked.get(),
+                    || {
+                        locked.set(true);
+                        Some(serde_json::json!({"address": "0x1"}))
+                    },
+                    |_| panic!("locked delivery must not dispatch"),
+                )
+            },
+        );
+        assert!(copied.get());
+        assert_eq!(delivery, Delivery::SessionLocked { copied: true });
+        for saved in [true, false] {
+            assert_eq!(delivery.notice(saved), Some("Session locked · text copied"));
+        }
+    }
+
+    #[test]
+    fn lock_notice_takes_precedence_when_focus_also_changes() {
+        let focus = Focus {
+            hyprland: true,
+            address: Some("0x1".into()),
+        };
+        let delivery = paste_with(
+            &focus,
+            || true,
+            || Some(serde_json::json!({"address": "0x2"})),
+            |_| panic!("changed focus must not dispatch"),
+        );
+        assert_eq!(delivery, Delivery::SessionLocked { copied: true });
     }
 
     #[test]

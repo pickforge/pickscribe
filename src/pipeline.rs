@@ -79,7 +79,7 @@ impl Controller {
                     recording.raw = raw_at_either_tap(recording.raw, raw);
                     self.finish(recording);
                     // Taps made while the text was processed are stale.
-                    while commands.try_recv().is_ok() {}
+                    discard_commands(&commands);
                 }
                 (Command::Cancel, Some(_)) => {
                     self.show(UiEvent::Hidden);
@@ -101,6 +101,7 @@ impl Controller {
         };
         if recording.lock.locked() {
             active.take();
+            discard_commands(commands);
             self.show(UiEvent::Notice("Session locked".into()));
             self.hub.finished(None, false);
             return Ok(None);
@@ -144,18 +145,13 @@ impl Controller {
         }
     }
 
-    fn finish(&self, mut recording: Recording) {
+    fn finish(&self, recording: Recording) {
         let stopped = Instant::now();
         let pcm = recording.recorder.finish();
         let focus = output::Focus::capture();
-        if recording.lock.stop() {
-            self.show(UiEvent::Notice("Session locked".into()));
-            self.hub.finished(None, false);
-            return;
-        }
         self.show(UiEvent::Thinking { raw: recording.raw });
         self.hub.set_state(State::Thinking, recording.raw);
-        let outcome = self.process(&pcm, recording.raw, stopped, &focus);
+        let outcome = self.process(&pcm, recording.raw, stopped, &focus, &recording.lock);
         self.show(match outcome.notice {
             Some(notice) => UiEvent::Notice(notice.into()),
             None => UiEvent::Hidden,
@@ -163,7 +159,14 @@ impl Controller {
         self.hub.finished(outcome.timings, outcome.saved);
     }
 
-    fn process(&self, pcm: &[f32], raw: bool, stopped: Instant, focus: &output::Focus) -> Outcome {
+    fn process(
+        &self,
+        pcm: &[f32],
+        raw: bool,
+        stopped: Instant,
+        focus: &output::Focus,
+        lock: &LockMonitor,
+    ) -> Outcome {
         if pcm.len() < MIN_SAMPLES || audio::peak_window_rms(pcm) < MIN_SPEECH_RMS {
             return Outcome::notice(NO_SPEECH);
         }
@@ -194,7 +197,12 @@ impl Controller {
         let audio_ms = pcm.len() as u64 * 1000 / u64::from(SAMPLE_RATE);
         let mut item = Item::new(mode, text, transcript, audio_ms);
         item.doubtful = doubtful;
-        let delivery = output::deliver(&item.text, focus, session_locked);
+        let delivery = output::deliver(
+            &item.text,
+            focus,
+            || lock.locked(),
+            || lock.check(session_locked),
+        );
         item.delivered = delivery == output::Delivery::Pasted;
         let timings = Timings {
             audio_ms,
@@ -283,6 +291,10 @@ impl Controller {
     }
 }
 
+fn discard_commands(commands: &Receiver<Command>) {
+    while commands.try_recv().is_ok() {}
+}
+
 fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
@@ -315,11 +327,10 @@ impl Drop for ReviewGuard {
     }
 }
 
-/// Checks beside the microphone startup and remembers any lock until recording ends.
+/// Checks beside the microphone startup and remembers any lock through delivery.
 struct LockMonitor {
     locked: Arc<AtomicBool>,
     stop: mpsc::Sender<()>,
-    worker: Option<std::thread::JoinHandle<()>>,
 }
 
 impl LockMonitor {
@@ -327,9 +338,10 @@ impl LockMonitor {
         let locked = Arc::new(AtomicBool::new(false));
         let state = Arc::clone(&locked);
         let (stop, receiver) = mpsc::channel();
-        let worker = std::thread::spawn(move || {
+        std::thread::spawn(move || {
             loop {
-                if check() {
+                // A failed check must not allow delivery from an unchecked recording.
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(&check)).unwrap_or(true) {
                     state.store(true, Ordering::SeqCst);
                     return;
                 }
@@ -338,25 +350,22 @@ impl LockMonitor {
                 }
             }
         });
-        Self {
-            locked,
-            stop,
-            worker: Some(worker),
-        }
+        Self { locked, stop }
     }
 
     fn locked(&self) -> bool {
         self.locked.load(Ordering::SeqCst)
     }
 
-    fn stop(&mut self) -> bool {
-        let _ = self.stop.send(());
-        if let Some(worker) = self.worker.take() {
-            // A failed check must not allow delivery from an unchecked recording.
-            if worker.join().is_err() {
-                self.locked.store(true, Ordering::SeqCst);
-            }
+    fn check(&self, check: impl FnOnce() -> bool) -> bool {
+        if self.locked() || check() {
+            self.locked.store(true, Ordering::SeqCst);
         }
+        self.locked()
+    }
+
+    fn stop(&self) -> bool {
+        let _ = self.stop.send(());
         self.locked()
     }
 }
@@ -476,19 +485,82 @@ mod tests {
         assert_eq!(logind_session(Some("7".into())), "7");
     }
 
+    fn wait_for_lock(monitor: &LockMonitor) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !monitor.locked() {
+            assert!(Instant::now() < deadline, "lock was not latched");
+            std::thread::yield_now();
+        }
+    }
+
     #[test]
-    fn lock_monitor_starts_without_waiting_and_checks_before_finishing() {
+    fn lock_monitor_stop_and_drop_do_not_wait_for_an_in_flight_poll() {
         let (entered, started) = mpsc::channel();
         let (release, wait) = mpsc::channel();
-        let mut monitor = LockMonitor::start(move || {
+        let monitor = LockMonitor::start(move || {
             entered.send(()).unwrap();
             wait.recv().unwrap()
         });
         started.recv_timeout(Duration::from_secs(2)).unwrap();
-        assert!(!monitor.locked());
+        let (stopped, result) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let locked = monitor.stop();
+            drop(monitor);
+            stopped.send(locked).unwrap();
+        });
+        let locked = result.recv_timeout(Duration::from_millis(500));
+        release.send(false).unwrap();
+        worker.join().unwrap();
+        assert!(!locked.expect("stop waited for the poll"));
+    }
+
+    #[test]
+    fn lock_monitor_latches_a_lock_and_unlock_during_processing() {
+        let (entered, started) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        let monitor = LockMonitor::start(move || {
+            entered.send(()).unwrap();
+            wait.recv().unwrap()
+        });
+        started.recv_timeout(Duration::from_secs(2)).unwrap();
+        // Processing runs while the poll is in flight.
         release.send(true).unwrap();
+        wait_for_lock(&monitor);
+        // The session has unlocked by the time delivery checks it again.
+        assert!(monitor.check(|| panic!("a latched lock must not wait for another check")));
+        let delivery = output::deliver(
+            "processed dictation",
+            &output::Focus::default(),
+            || monitor.locked(),
+            || panic!("a latched lock must not reach dispatch"),
+        );
+        assert_eq!(delivery, output::Delivery::SessionLocked { copied: false });
+        assert_eq!(
+            delivery.notice(true),
+            Some("Session locked · text in history")
+        );
         assert!(monitor.stop());
+    }
+
+    #[test]
+    fn lock_cancel_discards_queued_taps_but_keeps_future_commands() {
+        let monitor = LockMonitor::start(|| true);
+        wait_for_lock(&monitor);
+        let (sender, commands) = mpsc::channel();
+        sender.send(Command::Toggle { raw: false }).unwrap();
+        sender.send(Command::Cancel).unwrap();
+        sender.send(Command::Toggle { raw: true }).unwrap();
         assert!(monitor.locked());
+        discard_commands(&commands);
+        assert!(matches!(
+            commands.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        sender.send(Command::Toggle { raw: false }).unwrap();
+        assert!(matches!(
+            commands.recv().unwrap(),
+            Command::Toggle { raw: false }
+        ));
     }
 
     #[test]
@@ -496,13 +568,14 @@ mod tests {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let checks = Arc::clone(&calls);
         let (checked, replies) = mpsc::channel();
-        let mut monitor = LockMonitor::start(move || {
+        let monitor = LockMonitor::start(move || {
             let locked = checks.fetch_add(1, Ordering::SeqCst) > 0;
             checked.send(locked).unwrap();
             locked
         });
         assert!(!replies.recv_timeout(Duration::from_secs(2)).unwrap());
         assert!(replies.recv_timeout(Duration::from_secs(2)).unwrap());
+        wait_for_lock(&monitor);
         assert!(monitor.stop());
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
