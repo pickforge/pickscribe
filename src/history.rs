@@ -20,7 +20,7 @@ pub struct Item {
     pub text: String,
     /// What Whisper heard, before the AI cleanup.
     pub transcript: String,
-    /// False when pasting failed, so the text only reached the clipboard.
+    /// False when the text was not pasted.
     pub delivered: bool,
     pub audio_ms: u64,
     /// Words Whisper was unsure about.

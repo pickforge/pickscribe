@@ -22,11 +22,69 @@ const TERMINALS: &[&str] = &[
     "xterm",
 ];
 
-pub fn deliver(text: &str) -> Result<()> {
-    copy(text)?;
+#[derive(Debug, PartialEq)]
+pub enum Delivery {
+    Pasted,
+    FocusChanged,
+    CopyFailed,
+    PasteFailed,
+}
+
+impl Delivery {
+    pub fn notice(&self) -> Option<&'static str> {
+        match self {
+            Self::Pasted => None,
+            Self::FocusChanged => Some("Focus changed · text copied"),
+            Self::CopyFailed => Some("Paste failed · text in history"),
+            Self::PasteFailed => Some("Paste failed · text copied"),
+        }
+    }
+}
+
+pub struct Focus {
+    hyprland: bool,
+    address: Option<String>,
+}
+
+impl Focus {
+    pub fn capture() -> Self {
+        let hyprland = std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_some();
+        Self {
+            hyprland,
+            address: hyprland
+                .then(active_window)
+                .flatten()
+                .and_then(|window| window["address"].as_str().map(str::to_string)),
+        }
+    }
+
+    fn changed(&self, current: Option<&str>) -> bool {
+        self.hyprland && (self.address.is_none() || self.address.as_deref() != current)
+    }
+}
+
+pub fn deliver(text: &str, focus: &Focus) -> Delivery {
+    if let Err(err) = copy(text) {
+        eprintln!("pickscribe: copy failed: {err:#}");
+        return Delivery::CopyFailed;
+    }
     thread::sleep(PASTE_DELAY);
-    let args = paste_args(active_window_class().as_deref());
-    run("wtype", &args)
+    let window = active_window();
+    if focus.changed(
+        window
+            .as_ref()
+            .and_then(|window| window["address"].as_str()),
+    ) {
+        return Delivery::FocusChanged;
+    }
+    let args = paste_args(window.as_ref().and_then(|window| window["class"].as_str()));
+    match run("wtype", &args) {
+        Ok(()) => Delivery::Pasted,
+        Err(err) => {
+            eprintln!("pickscribe: paste failed: {err:#}");
+            Delivery::PasteFailed
+        }
+    }
 }
 
 pub fn copy(text: &str) -> Result<()> {
@@ -62,13 +120,15 @@ fn paste_args(class: Option<&str>) -> Vec<&'static str> {
 }
 
 /// Hyprland reports the focused window; other compositors fall back to Ctrl+V.
-fn active_window_class() -> Option<String> {
+fn active_window() -> Option<serde_json::Value> {
     let output = Command::new("hyprctl")
         .args(["activewindow", "-j"])
         .output()
         .ok()?;
-    let window: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
-    window["class"].as_str().map(str::to_string)
+    if !output.status.success() {
+        return None;
+    }
+    serde_json::from_slice(&output.stdout).ok()
 }
 
 fn run(program: &str, args: &[&str]) -> Result<()> {
@@ -85,6 +145,48 @@ fn run(program: &str, args: &[&str]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn focus_changes_and_unreadable_hyprland_focus_skip_pasting() {
+        let focus = Focus {
+            hyprland: true,
+            address: Some("0x1".into()),
+        };
+        assert!(!focus.changed(Some("0x1")));
+        assert!(focus.changed(Some("0x2")));
+        assert!(focus.changed(None));
+        assert!(
+            Focus {
+                hyprland: true,
+                address: None
+            }
+            .changed(None)
+        );
+        assert!(
+            !Focus {
+                hyprland: false,
+                address: None
+            }
+            .changed(None)
+        );
+    }
+
+    #[test]
+    fn delivery_notices_distinguish_clipboard_failure() {
+        assert_eq!(
+            Delivery::CopyFailed.notice(),
+            Some("Paste failed · text in history")
+        );
+        assert_eq!(
+            Delivery::PasteFailed.notice(),
+            Some("Paste failed · text copied")
+        );
+        assert_eq!(
+            Delivery::FocusChanged.notice(),
+            Some("Focus changed · text copied")
+        );
+        assert_eq!(Delivery::Pasted.notice(), None);
+    }
 
     #[test]
     fn terminals_get_ctrl_shift_v() {

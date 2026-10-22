@@ -2,7 +2,7 @@
 //! shortcut works the same under any compositor.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -21,49 +21,68 @@ const RESCAN: Duration = Duration::from_secs(3);
 /// another key (an AltGr character or a shortcut) does nothing.
 #[derive(Debug, Default)]
 pub struct ChordTracker {
-    alt_down: bool,
+    held: HashSet<(PathBuf, KeyCode)>,
+    alt_device: Option<PathBuf>,
     other_key: bool,
-    shift_down: bool,
     raw: bool,
 }
 
 impl ChordTracker {
-    pub fn key(&mut self, code: KeyCode, value: i32) -> Option<Command> {
+    pub fn key(&mut self, device: &Path, code: KeyCode, value: i32) -> Option<Command> {
+        let key = (device.to_path_buf(), code);
+        match value {
+            PRESS => {
+                self.held.insert(key);
+            }
+            RELEASE => {
+                self.held.remove(&key);
+            }
+            _ => return None,
+        }
+        let shift = |code| matches!(code, KeyCode::KEY_LEFTSHIFT | KeyCode::KEY_RIGHTSHIFT);
         match code {
             KeyCode::KEY_LEFTSHIFT | KeyCode::KEY_RIGHTSHIFT => {
-                self.shift_down = value != RELEASE;
-                self.raw |= self.alt_down && self.shift_down;
+                self.raw |= self.alt_device.is_some() && value == PRESS;
                 None
             }
-            KeyCode::KEY_RIGHTALT => self.right_alt(value),
-            KeyCode::KEY_ESC if value == PRESS => Some(Command::Cancel),
-            _ => {
-                self.other_key |= self.alt_down && value == PRESS;
+            KeyCode::KEY_RIGHTALT if value == PRESS => {
+                if self.alt_device.is_some() {
+                    self.other_key = true;
+                } else {
+                    self.other_key = self
+                        .held
+                        .iter()
+                        .any(|(path, key)| !(shift(*key) || path == device && *key == code));
+                    self.raw = self.held.iter().any(|(_, key)| shift(*key));
+                    self.alt_device = Some(device.to_path_buf());
+                }
                 None
+            }
+            KeyCode::KEY_RIGHTALT => {
+                if self.alt_device.as_deref() != Some(device) {
+                    return None;
+                }
+                self.alt_device = None;
+                (!self.other_key).then_some(Command::Toggle { raw: self.raw })
+            }
+            _ => {
+                self.other_key |= self.alt_device.is_some() && value == PRESS;
+                (code == KeyCode::KEY_ESC && value == PRESS).then_some(Command::Cancel)
             }
         }
     }
 
-    fn right_alt(&mut self, value: i32) -> Option<Command> {
-        match value {
-            PRESS => {
-                self.alt_down = true;
-                self.other_key = false;
-                self.raw = self.shift_down;
-                None
-            }
-            RELEASE => {
-                let tapped = self.alt_down && !self.other_key;
-                self.alt_down = false;
-                tapped.then_some(Command::Toggle { raw: self.raw })
-            }
-            _ => None,
+    fn forget(&mut self, device: &Path) {
+        self.held.retain(|(path, _)| path != device);
+        if self.alt_device.as_deref() == Some(device) {
+            self.alt_device = None;
         }
     }
 }
 
-/// Watches every keyboard that has a Right Alt key, including ones plugged in later.
+/// Watches keyboards with Right Alt or Shift, including ones plugged in later.
 pub fn spawn(commands: Sender<Command>) {
+    let tracker = Arc::new(Mutex::new(ChordTracker::default()));
     let watched = Arc::new(Mutex::new(HashSet::new()));
     thread::spawn(move || {
         let mut skipped = HashSet::new();
@@ -78,7 +97,13 @@ pub fn spawn(commands: Sender<Command>) {
                 match Device::open(&path) {
                     Ok(device) if has_right_alt(&device) => {
                         watched.lock().unwrap().insert(path.clone());
-                        watch(device, path, commands.clone(), Arc::clone(&watched));
+                        watch(
+                            device,
+                            path,
+                            commands.clone(),
+                            Arc::clone(&watched),
+                            Arc::clone(&tracker),
+                        );
                     }
                     Ok(_) => {
                         skipped.insert(path);
@@ -109,9 +134,11 @@ fn event_devices() -> Vec<PathBuf> {
 }
 
 fn has_right_alt(device: &Device) -> bool {
-    device
-        .supported_keys()
-        .is_some_and(|keys| keys.contains(KeyCode::KEY_RIGHTALT))
+    device.supported_keys().is_some_and(|keys| {
+        keys.contains(KeyCode::KEY_RIGHTALT)
+            || keys.contains(KeyCode::KEY_LEFTSHIFT)
+            || keys.contains(KeyCode::KEY_RIGHTSHIFT)
+    })
 }
 
 fn watch(
@@ -119,13 +146,19 @@ fn watch(
     path: PathBuf,
     commands: Sender<Command>,
     watched: Arc<Mutex<HashSet<PathBuf>>>,
+    tracker: Arc<Mutex<ChordTracker>>,
 ) {
     thread::spawn(move || {
-        let mut tracker = ChordTracker::default();
+        if let Ok(keys) = device.get_key_state() {
+            let mut tracker = tracker.lock().unwrap();
+            for key in keys.iter() {
+                tracker.held.insert((path.clone(), key));
+            }
+        }
         while let Ok(events) = device.fetch_events() {
             for event in events {
                 if let EventSummary::Key(_, code, value) = event.destructure()
-                    && let Some(command) = tracker.key(code, value)
+                    && let Some(command) = tracker.lock().unwrap().key(&path, code, value)
                     && commands.send(command).is_err()
                 {
                     return;
@@ -133,6 +166,7 @@ fn watch(
             }
         }
         // The keyboard went away; forget it so a replug is picked up by the next scan.
+        tracker.lock().unwrap().forget(&path);
         watched.lock().unwrap().remove(&path);
     });
 }
@@ -145,7 +179,7 @@ mod tests {
         let mut tracker = ChordTracker::default();
         events
             .iter()
-            .filter_map(|&(code, value)| tracker.key(code, value))
+            .filter_map(|&(code, value)| tracker.key(Path::new("a"), code, value))
             .collect()
     }
 
@@ -194,10 +228,66 @@ mod tests {
             (KeyCode::KEY_RIGHTALT, PRESS),
             (KeyCode::KEY_C, PRESS),
             (KeyCode::KEY_RIGHTALT, RELEASE),
+            (KeyCode::KEY_C, RELEASE),
             (KeyCode::KEY_RIGHTALT, PRESS),
             (KeyCode::KEY_RIGHTALT, RELEASE),
         ]);
         assert_eq!(commands, [Command::Toggle { raw: false }]);
+    }
+
+    #[test]
+    fn both_shifts_remain_raw_after_one_is_released() {
+        assert_eq!(
+            run(&[
+                (KeyCode::KEY_LEFTSHIFT, PRESS),
+                (KeyCode::KEY_RIGHTSHIFT, PRESS),
+                (KeyCode::KEY_LEFTSHIFT, RELEASE),
+                (KeyCode::KEY_RIGHTALT, PRESS),
+                (KeyCode::KEY_RIGHTALT, RELEASE),
+            ]),
+            [Command::Toggle { raw: true }]
+        );
+    }
+
+    #[test]
+    fn held_keys_and_escape_prevent_a_tap() {
+        assert!(
+            run(&[
+                (KeyCode::KEY_LEFTCTRL, PRESS),
+                (KeyCode::KEY_RIGHTALT, PRESS),
+                (KeyCode::KEY_RIGHTALT, RELEASE)
+            ])
+            .is_empty()
+        );
+        assert_eq!(
+            run(&[
+                (KeyCode::KEY_RIGHTALT, PRESS),
+                (KeyCode::KEY_ESC, PRESS),
+                (KeyCode::KEY_RIGHTALT, RELEASE)
+            ]),
+            [Command::Cancel]
+        );
+    }
+
+    #[test]
+    fn keyboards_share_modifiers_and_release_their_own_keys() {
+        let mut tracker = ChordTracker::default();
+        let a = Path::new("a");
+        let b = Path::new("b");
+        tracker.key(a, KeyCode::KEY_LEFTSHIFT, PRESS);
+        tracker.key(b, KeyCode::KEY_LEFTSHIFT, PRESS);
+        tracker.key(a, KeyCode::KEY_LEFTSHIFT, RELEASE);
+        tracker.key(a, KeyCode::KEY_RIGHTALT, PRESS);
+        assert_eq!(
+            tracker.key(a, KeyCode::KEY_RIGHTALT, RELEASE),
+            Some(Command::Toggle { raw: true })
+        );
+        tracker.forget(b);
+        tracker.key(a, KeyCode::KEY_RIGHTALT, PRESS);
+        assert_eq!(
+            tracker.key(a, KeyCode::KEY_RIGHTALT, RELEASE),
+            Some(Command::Toggle { raw: false })
+        );
     }
 
     #[test]

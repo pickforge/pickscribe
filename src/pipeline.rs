@@ -83,7 +83,8 @@ impl Controller {
             };
             match (command, active.take()) {
                 (Command::Toggle { raw }, None) => active = self.start(raw),
-                (Command::Toggle { .. }, Some(recording)) => {
+                (Command::Toggle { raw }, Some(mut recording)) => {
+                    recording.raw = raw_at_either_tap(recording.raw, raw);
                     self.finish(recording);
                     // Taps made while the text was processed are stale.
                     while commands.try_recv().is_ok() {}
@@ -98,6 +99,10 @@ impl Controller {
     }
 
     fn start(&self, raw: bool) -> Option<Recording> {
+        if session_locked() {
+            self.show(UiEvent::Notice("Session locked".into()));
+            return None;
+        }
         match Recorder::start(self.level.clone(), self.config.max_recording_secs) {
             Ok(recorder) => {
                 self.show(UiEvent::Listening { raw });
@@ -121,10 +126,11 @@ impl Controller {
 
     fn finish(&self, recording: Recording) {
         let stopped = Instant::now();
+        let focus = output::Focus::capture();
         self.show(UiEvent::Thinking { raw: recording.raw });
         self.hub.set_state(State::Thinking, recording.raw);
         let pcm = recording.recorder.finish();
-        let outcome = self.process(&pcm, recording.raw, stopped);
+        let outcome = self.process(&pcm, recording.raw, stopped, &focus);
         self.show(match outcome.notice {
             Some(notice) => UiEvent::Notice(notice.into()),
             None => UiEvent::Hidden,
@@ -132,7 +138,7 @@ impl Controller {
         self.hub.finished(outcome.timings, outcome.saved);
     }
 
-    fn process(&self, pcm: &[f32], raw: bool, stopped: Instant) -> Outcome {
+    fn process(&self, pcm: &[f32], raw: bool, stopped: Instant, focus: &output::Focus) -> Outcome {
         if pcm.len() < MIN_SAMPLES || audio::peak_window_rms(pcm) < MIN_SPEECH_RMS {
             return Outcome::notice(NO_SPEECH);
         }
@@ -163,16 +169,9 @@ impl Controller {
         let audio_ms = pcm.len() as u64 * 1000 / u64::from(SAMPLE_RATE);
         let mut item = Item::new(mode, text, transcript, audio_ms);
         item.doubtful = doubtful;
-        let notice = match output::deliver(&item.text) {
-            Ok(()) => {
-                item.delivered = true;
-                notice
-            }
-            Err(err) => {
-                eprintln!("pickscribe: paste failed: {err:#}");
-                Some("Paste failed · text copied")
-            }
-        };
+        let delivery = output::deliver(&item.text, focus);
+        item.delivered = delivery == output::Delivery::Pasted;
+        let notice = delivery.notice().or(notice);
         let timings = Timings {
             audio_ms,
             transcribe_ms,
@@ -201,13 +200,13 @@ impl Controller {
         if self.config.review_every == 0 || self.reviewing.swap(true, Ordering::SeqCst) {
             return;
         }
+        let reset = ReviewGuard(Arc::clone(&self.reviewing));
         let client = self.client.clone();
         let config = self.config.clone();
         let hub = Arc::clone(&self.hub);
-        let reviewing = Arc::clone(&self.reviewing);
         std::thread::spawn(move || {
+            let _reset = reset;
             review::run_due(&client, &config, &hub);
-            reviewing.store(false, Ordering::SeqCst);
         });
     }
 
@@ -228,7 +227,7 @@ impl Controller {
             .client
             .clean(&self.config, dictionary, &key, transcript)
         {
-            Ok(text) => (dictionary.apply(&text), Mode::Ai, None),
+            Ok(text) => cleaned_text(dictionary, transcript, &text),
             Err(err) => {
                 eprintln!("pickscribe: cleanup failed: {err:#}");
                 let notice = if err.is::<cleanup::Answered>() {
@@ -261,4 +260,132 @@ impl Controller {
 
 fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+fn raw_at_either_tap(start: bool, stop: bool) -> bool {
+    start || stop
+}
+
+fn cleaned_text(
+    dictionary: &Dictionary,
+    transcript: &str,
+    text: &str,
+) -> (String, Mode, Option<&'static str>) {
+    if text.trim().is_empty() {
+        (
+            transcript.to_string(),
+            Mode::Raw,
+            Some("Cleanup empty · raw text pasted"),
+        )
+    } else {
+        (dictionary.apply(text), Mode::Ai, None)
+    }
+}
+
+struct ReviewGuard(Arc<AtomicBool>);
+
+impl Drop for ReviewGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+fn lock_value(program: &str, args: &[&str]) -> Option<bool> {
+    let output = std::process::Command::new(program)
+        .args(args)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| parse_lock_value(&String::from_utf8_lossy(&output.stdout)))
+        .flatten()
+}
+
+fn parse_lock_value(value: &str) -> Option<bool> {
+    match value.trim() {
+        "true" | "yes" => Some(true),
+        "false" | "no" => Some(false),
+        _ => None,
+    }
+}
+
+fn session_locked() -> bool {
+    session_locked_from(
+        lock_value("omarchy-shell", &["-q", "lock", "isLocked"]),
+        || {
+            let session = std::env::var("XDG_SESSION_ID").unwrap_or_else(|_| "self".into());
+            lock_value(
+                "loginctl",
+                &["show-session", &session, "--property=LockedHint", "--value"],
+            )
+        },
+    )
+}
+
+fn session_locked_from(omarchy: Option<bool>, logind: impl FnOnce() -> Option<bool>) -> bool {
+    omarchy.or_else(logind).unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_at_either_tap_skips_cleanup() {
+        for (start, stop, raw) in [
+            (false, false, false),
+            (true, false, true),
+            (false, true, true),
+            (true, true, true),
+        ] {
+            assert_eq!(raw_at_either_tap(start, stop), raw);
+        }
+    }
+
+    #[test]
+    fn empty_cleanup_keeps_the_transcript() {
+        let (text, mode, notice) = cleaned_text(&Dictionary::default(), "hello", " ");
+        assert_eq!(text, "hello");
+        assert_eq!(mode, Mode::Raw);
+        assert!(notice.is_some());
+    }
+
+    #[test]
+    fn review_flag_resets_on_return_and_panic() {
+        let flag = Arc::new(AtomicBool::new(true));
+        {
+            let _guard = ReviewGuard(Arc::clone(&flag));
+        }
+        assert!(!flag.load(Ordering::SeqCst));
+        flag.store(true, Ordering::SeqCst);
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = ReviewGuard(Arc::clone(&flag));
+            panic!("review failed");
+        });
+        assert!(!flag.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn lock_checks_prefer_omarchy_and_allow_unreadable_state() {
+        assert!(session_locked_from(Some(true), || panic!(
+            "unexpected fallback"
+        )));
+        assert!(!session_locked_from(Some(false), || panic!(
+            "unexpected fallback"
+        )));
+        assert!(session_locked_from(None, || Some(true)));
+        assert!(!session_locked_from(None, || Some(false)));
+        assert!(!session_locked_from(None, || None));
+    }
+
+    #[test]
+    fn lock_replies_accept_both_services() {
+        assert_eq!(parse_lock_value("true\n"), Some(true));
+        assert_eq!(parse_lock_value("yes\n"), Some(true));
+        assert_eq!(parse_lock_value("false"), Some(false));
+        assert_eq!(parse_lock_value("no"), Some(false));
+        assert_eq!(parse_lock_value(""), None);
+        assert_eq!(parse_lock_value("error"), None);
+    }
 }
