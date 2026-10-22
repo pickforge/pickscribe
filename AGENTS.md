@@ -1,23 +1,7 @@
-# PickScribe
+PickScribe is a single Rust binary: a daemon with a GTK4 layer-shell overlay, plus `toggle`, `cancel`, and `transcribe` subcommands. Check with `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test`. The first build compiles whisper.cpp with Vulkan, which needs `cmake`, `clang`, `glslc`, and Vulkan headers.
 
-Local dictation for Linux and Apple silicon macOS. A Rust core (whisper.cpp transcription, LLM cleanup, paste) with CLI binaries, wrapped in a Tauri 2 and Svelte 5 app under `src-tauri/`.
+Only cleanup and the misheard word review may send text off the machine, and only AI-mode transcripts and the dictionary. Audio stays local and is never saved, Shift + Right Alt must never reach the network, and logs and the status stream must never contain transcripts. History is the only place text is stored. Expanding that boundary requires updating the privacy sections of README.md and SECURITY.md.
 
-```
-bun install
-bun run tauri dev                 # bun run dev is Vite alone
-bun run check && bun run lint && bun run test && bun run test:coverage
-cargo test --workspace --locked --all-targets
-cargo clippy --workspace --all-targets -- -D warnings
-cargo check -p pickscribe-app --features pickscribe-app/custom-protocol   # the production build path; nothing else exercises it
-```
+Settings and keys live in `~/.config/pickscribe`, models in `~/.local/share/pickscribe/models`. The legacy Tauri app also stored `config.toml`, `env`, and `pickscribe.db` there; never rewrite or delete them. The new settings file is `pickscribe.toml`.
 
-The root crate and `src-tauri` are one workspace, but `default-members` is the root, so bare cargo commands quietly skip the app. The `run` skill in `.agents/skills/run` explains how to launch an isolated copy for screenshots without touching your real session.
-
-Things you can't guess:
-
-- Only the cleanup step may send text off the machine. Transcription is always local and local-only mode has to stay honest. Widening this means updating the README privacy section.
-- Coverage floors (vitest thresholds, `--fail-under-lines`) are ratchets. Don't lower them.
-- The version lives in four files: `package.json`, `Cargo.toml`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`. Release CI fails if the tag doesn't match `tauri.conf.json`. Smoke the exact draft AppImage on a desktop before publishing.
-- Settings, API keys and history live in `~/.config/pickscribe` and `~/.local/share/pickscribe`, shared with the CLI binaries, not `~/.pickforge`.
-- ESLint here, not oxlint; brand CSS, not Tailwind.
-- The legacy `voice-flow` and `pickscribe-gui` wrappers stay so existing keyboard shortcuts keep working.
+`.agents/skills/run` describes how to launch and check the daemon without pasting into the user's session. `scripts/omarchy-lab` runs an invisible Omarchy shell for checking the bar widget; never open panels or take screenshots on the user's real display.

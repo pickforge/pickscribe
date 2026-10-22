@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "pickforge.pickscribe",
+  "name": "PickScribe",
+  "version": "0.1.0",
+  "author": "Pickforge",
+  "license": "MIT",
+  "description": "PickScribe dictation state, history, and dictionary in a native Omarchy bar panel.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "PickScribe",
+    "description": "Microphone icon that shows the dictation state, with a panel for history, timings, and the dictionary.",
+    "category": "AI",
+    "aliases": ["pickscribe", "dictation"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "executable": "pickscribe"
+    },
+    "schema": [
+      { "key": "executable", "type": "string", "label": "PickScribe executable", "defaultValue": "pickscribe", "description": "Command or path used to talk to the daemon." }
+    ]
+  }
+}
