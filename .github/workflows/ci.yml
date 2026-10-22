@@ -26,8 +26,21 @@ jobs:
         with:
           args: git --no-banner --redact
 
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - uses: taiki-e/install-action@75a348306ce8f67c0b06fc62c32a8546140ba955 # 2026-07-23
+        with:
+          tool: cargo-audit
+
+      - name: Audit Cargo.lock against the RustSec advisories
+        run: cargo audit
+
   check:
-    name: Check and test
+    name: Check and build
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     # Arch ships gtk4-layer-shell and current Vulkan tooling, matching the target desktop.
