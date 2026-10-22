@@ -105,6 +105,18 @@ impl std::fmt::Display for Answered {
 
 impl std::error::Error for Answered {}
 
+/// A successful request whose reply cannot be used.
+#[derive(Debug)]
+pub struct UnusableReply;
+
+impl std::fmt::Display for UnusableReply {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("unusable Anthropic API reply")
+    }
+}
+
+impl std::error::Error for UnusableReply {}
+
 /// Cleanup only removes or fixes words, so a much longer result means the model answered.
 fn answered(transcript: &str, cleaned: &str) -> bool {
     let before = transcript.split_whitespace().count();
@@ -121,7 +133,7 @@ fn read_response(response: reqwest::blocking::Response) -> Result<String> {
             api_error_message(&body)
         );
     }
-    parse_response(&body)
+    parse_response(&body).context(UnusableReply)
 }
 
 fn request_body(config: &Config, dictionary: &Dictionary, transcript: &str) -> Value {
@@ -208,6 +220,62 @@ fn api_error_message(body: &str) -> String {
 mod tests {
     use super::*;
     use crate::dictionary::Entry;
+
+    fn response(status: &str, body: &str) -> reqwest::blocking::Response {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let reply = format!(
+            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let worker = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = [0; 4096];
+            let read = stream.read(&mut request).unwrap();
+            assert!(read > 0);
+            stream.write_all(reply.as_bytes()).unwrap();
+        });
+        let response = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap()
+            .get(url)
+            .send()
+            .unwrap();
+        worker.join().unwrap();
+        response
+    }
+
+    #[test]
+    fn successful_unusable_responses_are_distinct_from_http_errors() {
+        for body in [
+            r#"{"content":[],"stop_reason":"refusal"}"#,
+            r#"{"content":[],"stop_reason":"max_tokens"}"#,
+            "invalid JSON",
+        ] {
+            let error = read_response(response("200 OK", body)).unwrap_err();
+            assert!(error.is::<UnusableReply>());
+        }
+        let error = read_response(response(
+            "429 Too Many Requests",
+            r#"{"error":{"message":"retry"}}"#,
+        ))
+        .unwrap_err();
+        assert!(!error.is::<UnusableReply>());
+        assert_eq!(
+            read_response(response(
+                "200 OK",
+                r#"{"content":[{"type":"text","text":"[]"}]}"#
+            ))
+            .unwrap(),
+            "[]"
+        );
+    }
 
     #[test]
     fn request_wraps_the_transcript_and_carries_vocabulary() {

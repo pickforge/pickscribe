@@ -95,21 +95,27 @@ fn parse_store(text: &str, history: impl FnOnce() -> Result<Vec<Item>>) -> Resul
             if !suggestion.history_id.is_empty() {
                 continue;
             }
-            let example = old["example"].as_str();
-            let batch_id = suggestion.id.rsplit_once('-').map(|(id, _)| id);
-            if let Some(item) = items.iter().rev().find(|item| {
-                item.mode == Mode::Ai
-                    && dictionary::contains_word(&item.transcript, &suggestion.heard)
-                    && match example {
-                        Some(example) => excerpt(&item.transcript, &suggestion.heard) == example,
-                        None => Some(item.id.as_str()) == batch_id,
-                    }
-            }) {
+            if let Some(item) = legacy_context(&items, suggestion, old) {
                 suggestion.history_id.clone_from(&item.id);
             }
         }
     }
     Ok((store, legacy))
+}
+
+fn legacy_context<'a>(items: &'a [Item], suggestion: &Suggestion, old: &Value) -> Option<&'a Item> {
+    let candidates = items.iter().rev().filter(|item| {
+        item.mode == Mode::Ai && dictionary::contains_word(&item.transcript, &suggestion.heard)
+    });
+    let example = old["example"].as_str();
+    let batch_id = suggestion.id.rsplit_once('-').map(|(id, _)| id);
+    candidates
+        .clone()
+        .find(|item| match example {
+            Some(example) => excerpt(&item.transcript, &suggestion.heard) == example,
+            None => Some(item.id.as_str()) == batch_id,
+        })
+        .or_else(|| candidates.into_iter().next())
 }
 
 fn load() -> Result<Store> {
@@ -215,14 +221,35 @@ pub fn review(
         return Ok(Vec::new());
     };
     let dictionary = Dictionary::load()?;
-    let reply = client.ask(api_key, &request_body(config, &dictionary, items))?;
-    let found = parse_reply(&reply)?;
-    edit(|store| {
-        let fresh = accept_found(store, &dictionary, items, found);
-        store.pending.extend(fresh.iter().cloned());
-        store.reviewed_through.clone_from(&last.id);
-        Ok(fresh)
-    })
+    review_reply(
+        client.ask(api_key, &request_body(config, &dictionary, items)),
+        |found| {
+            edit(|store| {
+                let fresh = accept_found(store, &dictionary, items, found);
+                store.pending.extend(fresh.iter().cloned());
+                store.reviewed_through.clone_from(&last.id);
+                Ok(fresh)
+            })
+        },
+    )
+}
+
+fn review_reply(
+    reply: Result<String>,
+    save: impl FnOnce(Vec<Found>) -> Result<Vec<Suggestion>>,
+) -> Result<Vec<Suggestion>> {
+    let found = match reply {
+        Ok(reply) => parse_reply(&reply),
+        Err(err) if err.is::<cleanup::UnusableReply>() => Err(err),
+        Err(err) => return Err(err),
+    };
+    match found {
+        Ok(found) => save(found),
+        Err(err) => {
+            save(Vec::new())?;
+            Err(err)
+        }
+    }
 }
 
 fn request_body(config: &Config, dictionary: &Dictionary, items: &[Item]) -> Value {
@@ -368,27 +395,38 @@ pub fn run_due(client: &cleanup::Client, config: &Config, hub: &Arc<Hub>) {
     let Some(key) = config::api_key() else {
         return;
     };
-    let due = match history::load().and_then(|items| {
-        let through = load()?.reviewed_through.parse::<u128>().unwrap_or(0);
-        Ok(due_batch(&items, through, config.review_every))
-    }) {
-        Ok(due) if !due.is_empty() => due,
-        Ok(_) => return,
-        Err(err) => {
-            eprintln!("pickscribe: review skipped: {err:#}");
-            return;
-        }
-    };
-    match review(client, config, &key, &due) {
-        Ok(fresh) if fresh.is_empty() => {}
-        Ok(fresh) => {
-            hub.suggestions_changed();
-            for _ in fresh {
-                announce();
+    let result = drain_due(
+        || {
+            let items = history::load()?;
+            let through = load()?.reviewed_through.parse::<u128>().unwrap_or(0);
+            Ok(due_batch(&items, through, config.review_every))
+        },
+        |due| {
+            let fresh = review(client, config, &key, due)?;
+            if !fresh.is_empty() {
+                hub.suggestions_changed();
+                for _ in fresh {
+                    announce();
+                }
             }
+            Ok(())
+        },
+    );
+    if let Err(err) = result {
+        eprintln!("pickscribe: review failed: {err:#}");
+    }
+}
+
+fn drain_due(
+    mut next: impl FnMut() -> Result<Vec<Item>>,
+    mut review: impl FnMut(&[Item]) -> Result<()>,
+) -> Result<()> {
+    loop {
+        let due = next()?;
+        if due.is_empty() {
+            return Ok(());
         }
-        // The dictations stay unreviewed, so the next one retries.
-        Err(err) => eprintln!("pickscribe: review failed: {err:#}"),
+        review(&due)?;
     }
 }
 
@@ -499,6 +537,75 @@ mod tests {
     }
 
     #[test]
+    fn unusable_replies_advance_but_request_errors_retry_the_batch() {
+        let items = [item("1", Mode::Ai, "Bitforge"), item("2", Mode::Ai, "text")];
+        let dictionary = Dictionary::default();
+        for reply in [
+            Ok("no array".to_string()),
+            Ok("[invalid]".to_string()),
+            Err(anyhow::Error::new(cleanup::UnusableReply)),
+        ] {
+            let mut store = Store::default();
+            let result = review_reply(reply, |found| {
+                let fresh = accept_found(&store, &dictionary, &items, found);
+                store.pending.extend(fresh.iter().cloned());
+                store.reviewed_through = "2".into();
+                Ok(fresh)
+            });
+            assert!(result.is_err());
+            assert_eq!(store.reviewed_through, "2");
+            assert!(store.pending.is_empty());
+            assert!(newer_ai(&items, 2, 2).is_empty());
+        }
+        for error in ["transport failed", "HTTP 429"] {
+            let result = review_reply(Err(anyhow::anyhow!(error)), |_| {
+                panic!("request errors must not advance the review")
+            });
+            assert_eq!(result.unwrap_err().to_string(), error);
+            assert_eq!(newer_ai(&items, 0, 2), items);
+        }
+    }
+
+    #[test]
+    fn automatic_review_drains_full_batches_and_stops_on_failure() {
+        use std::cell::Cell;
+        let items: Vec<_> = (1..=7)
+            .map(|id| item(&id.to_string(), Mode::Ai, "a"))
+            .collect();
+        let through = Cell::new(0);
+        let mut batches = Vec::new();
+        drain_due(
+            || Ok(due_batch(&items, through.get(), 2)),
+            |batch| {
+                batches.push(batch.iter().map(|item| item.id.clone()).collect::<Vec<_>>());
+                through.set(batch.last().unwrap().id.parse().unwrap());
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(batches, [vec!["1", "2"], vec!["3", "4"], vec!["5", "6"]]);
+        assert_eq!(through.get(), 6);
+        through.set(0);
+        let mut attempts = 0;
+        assert!(
+            drain_due(
+                || Ok(due_batch(&items, through.get(), 2)),
+                |batch| {
+                    attempts += 1;
+                    if attempts == 2 {
+                        bail!("request failed");
+                    }
+                    through.set(batch.last().unwrap().id.parse().unwrap());
+                    Ok(())
+                },
+            )
+            .is_err()
+        );
+        assert_eq!(attempts, 2);
+        assert_eq!(through.get(), 2);
+    }
+
+    #[test]
     fn failed_dictionary_save_keeps_the_suggestion() {
         let mut store = Store {
             pending: vec![Suggestion {
@@ -556,6 +663,30 @@ mod tests {
         assert!(!saved.contains("example"));
         assert!(!saved.contains("reason"));
         assert!(!saved.contains("dictation"));
+    }
+
+    #[test]
+    fn legacy_context_falls_back_to_the_newest_ai_match() {
+        let items = vec![
+            item("1", Mode::Ai, "first Bitforge dictation"),
+            item("2", Mode::Ai, "newest Bitforge dictation"),
+            item("3", Mode::Raw, "raw Bitforge dictation"),
+            item("4", Mode::Ai, "no matching word"),
+        ];
+        let legacy = json!({"pending": [
+            {"id": "4-0", "heard": "Bitforge", "meant": "Pickforge", "example": "old shortened context"},
+            {"id": "4-1", "heard": "Bitforge", "meant": "Pickforge", "reason": "legacy reason"},
+            {"id": "4-2", "heard": "Bitforge", "meant": "Pickforge", "example": "first Bitforge dictation"}
+        ]});
+        let (store, migrated) = parse_store(&legacy.to_string(), || Ok(items.clone())).unwrap();
+        assert!(migrated);
+        assert_eq!(store.pending[0].history_id, "2");
+        assert_eq!(store.pending[1].history_id, "2");
+        assert_eq!(store.pending[2].history_id, "1");
+        assert_eq!(
+            suggestion_context(&store.pending[0], &items),
+            "newest Bitforge dictation"
+        );
     }
 
     #[test]
