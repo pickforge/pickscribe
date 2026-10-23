@@ -35,15 +35,7 @@ class BlockedAppsScreen extends StatelessWidget {
                   children: [
                     for (var i = 0; i < blocked.length; i++) ...[
                       if (i > 0) const Divider(indent: 64, endIndent: 16),
-                      ListTile(
-                        minTileHeight: 60,
-                        leading: AppIcon(blocked[i], size: 32),
-                        title: Text(system.app(blocked[i])?.name ?? blocked[i]),
-                        trailing: TextButton(
-                          onPressed: () => system.unblock(blocked[i]),
-                          child: const Text('Show'),
-                        ),
-                      ),
+                      _BlockedRow(blocked[i]),
                     ],
                   ],
                 ),
@@ -52,6 +44,23 @@ class BlockedAppsScreen extends StatelessWidget {
           );
         },
       ),
+    );
+  }
+}
+
+class _BlockedRow extends StatelessWidget {
+  const _BlockedRow(this.package);
+
+  final String package;
+
+  @override
+  Widget build(BuildContext context) {
+    final system = ServicesScope.of(context).system;
+    return ListTile(
+      minTileHeight: 60,
+      leading: AppIcon(package, size: 32),
+      title: Text(system.app(package)?.name ?? package),
+      trailing: TextButton(onPressed: () => system.unblock(package), child: const Text('Show')),
     );
   }
 }

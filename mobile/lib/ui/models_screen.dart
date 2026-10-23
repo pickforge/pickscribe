@@ -62,100 +62,124 @@ class _ModelCard extends StatelessWidget {
                   : null,
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 14, 8, 14),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(
-                          selected
-                              ? Icons.radio_button_checked_rounded
-                              : Icons.radio_button_off_rounded,
-                          color: selected
-                              ? Palette.ember
-                              : (downloaded ? Palette.muted : Palette.raised),
-                          size: 22,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                model.name,
-                                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                              ),
-                              const SizedBox(height: 4),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 4,
-                                crossAxisAlignment: WrapCrossAlignment.center,
-                                children: [
-                                  Text(
-                                    model.size,
-                                    style: const TextStyle(
-                                      fontFamily: mono,
-                                      fontSize: 12.5,
-                                      color: Palette.muted,
-                                    ),
-                                  ),
-                                  if (model == recommendedModel) const Tag('Recommended'),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                        _Actions(
-                          model: model,
-                          downloaded: downloaded,
-                          downloading: progress != null,
-                        ),
-                      ],
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.only(left: 34, top: 10),
-                      child: Wrap(
-                        spacing: 16,
-                        runSpacing: 6,
-                        children: [
-                          Meter(label: 'Speed', value: model.speed),
-                          Meter(label: 'Accuracy', value: model.accuracy),
-                        ],
-                      ),
-                    ),
-                    if (progress != null)
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(34, 14, 8, 2),
-                        child: Row(
-                          children: [
-                            Expanded(child: LinearProgressIndicator(value: progress)),
-                            const SizedBox(width: 12),
-                            Text(
-                              '${(progress * 100).floor()}%',
-                              style: const TextStyle(
-                                fontFamily: mono,
-                                fontSize: 12,
-                                color: Palette.muted,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    if (error != null)
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(34, 10, 8, 0),
-                        child: Text(
-                          error,
-                          style: const TextStyle(color: Palette.danger, fontSize: 13),
-                        ),
-                      ),
-                  ],
+                child: _ModelDetails(
+                  model: model,
+                  downloaded: downloaded,
+                  selected: selected,
+                  progress: progress,
+                  error: error,
                 ),
               ),
             ),
           ),
         );
       },
+    );
+  }
+}
+
+class _ModelDetails extends StatelessWidget {
+  const _ModelDetails({
+    required this.model,
+    required this.downloaded,
+    required this.selected,
+    required this.progress,
+    required this.error,
+  });
+
+  final WhisperModel model;
+  final bool downloaded;
+  final bool selected;
+  final double? progress;
+  final String? error;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(
+              selected ? Icons.radio_button_checked_rounded : Icons.radio_button_off_rounded,
+              color: selected ? Palette.ember : (downloaded ? Palette.muted : Palette.raised),
+              size: 22,
+            ),
+            const SizedBox(width: 12),
+            Expanded(child: _ModelName(model: model)),
+            _Actions(model: model, downloaded: downloaded, downloading: progress != null),
+          ],
+        ),
+        Padding(
+          padding: const EdgeInsets.only(left: 34, top: 10),
+          child: Wrap(
+            spacing: 16,
+            runSpacing: 6,
+            children: [
+              Meter(label: 'Speed', value: model.speed),
+              Meter(label: 'Accuracy', value: model.accuracy),
+            ],
+          ),
+        ),
+        if (progress != null) _DownloadProgress(progress: progress!),
+        if (error != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(34, 10, 8, 0),
+            child: Text(error!, style: const TextStyle(color: Palette.danger, fontSize: 13)),
+          ),
+      ],
+    );
+  }
+}
+
+class _ModelName extends StatelessWidget {
+  const _ModelName({required this.model});
+
+  final WhisperModel model;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(model.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 4),
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            Text(
+              model.size,
+              style: const TextStyle(fontFamily: mono, fontSize: 12.5, color: Palette.muted),
+            ),
+            if (model == recommendedModel) const Tag('Recommended'),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _DownloadProgress extends StatelessWidget {
+  const _DownloadProgress({required this.progress});
+
+  final double progress;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(34, 14, 8, 2),
+      child: Row(
+        children: [
+          Expanded(child: LinearProgressIndicator(value: progress)),
+          const SizedBox(width: 12),
+          Text(
+            '${(progress * 100).floor()}%',
+            style: const TextStyle(fontFamily: mono, fontSize: 12, color: Palette.muted),
+          ),
+        ],
+      ),
     );
   }
 }

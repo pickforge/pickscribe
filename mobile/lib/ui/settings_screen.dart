@@ -70,31 +70,7 @@ class SettingsScreen extends StatelessWidget {
                 ),
               ],
             ),
-            Section(
-              title: 'Permissions',
-              children: [
-                SettingRow(
-                  icon: Icons.mic_none_rounded,
-                  title: 'Microphone',
-                  trailing: system.status.microphone
-                      ? const _Granted('Allowed')
-                      : TextButton(
-                          onPressed: system.bridge.requestMicrophone,
-                          child: const Text('Allow'),
-                        ),
-                ),
-                SettingRow(
-                  icon: Icons.bubble_chart_outlined,
-                  title: 'Bubble service',
-                  trailing: system.status.service
-                      ? const _Granted('On')
-                      : TextButton(
-                          onPressed: system.bridge.openAccessibilitySettings,
-                          child: const Text('Turn on'),
-                        ),
-                ),
-              ],
-            ),
+            _Permissions(system: system),
             Section(
               title: 'About',
               children: [
@@ -130,6 +106,38 @@ class SettingsScreen extends StatelessWidget {
     return showModalBottomSheet<void>(
       context: context,
       builder: (_) => _LanguagesSheet(store: store),
+    );
+  }
+}
+
+class _Permissions extends StatelessWidget {
+  const _Permissions({required this.system});
+
+  final SystemState system;
+
+  @override
+  Widget build(BuildContext context) {
+    return Section(
+      title: 'Permissions',
+      children: [
+        SettingRow(
+          icon: Icons.mic_none_rounded,
+          title: 'Microphone',
+          trailing: system.status.microphone
+              ? const _Granted('Allowed')
+              : TextButton(onPressed: system.bridge.requestMicrophone, child: const Text('Allow')),
+        ),
+        SettingRow(
+          icon: Icons.bubble_chart_outlined,
+          title: 'Bubble service',
+          trailing: system.status.service
+              ? const _Granted('On')
+              : TextButton(
+                  onPressed: system.bridge.openAccessibilitySettings,
+                  child: const Text('Turn on'),
+                ),
+        ),
+      ],
     );
   }
 }

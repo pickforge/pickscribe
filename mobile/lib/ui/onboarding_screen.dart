@@ -144,30 +144,7 @@ class _Step extends StatelessWidget {
                   ),
                   const SizedBox(width: 14),
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          title,
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: done ? Palette.muted : Palette.text,
-                          ),
-                        ),
-                        if (detail != null) ...[
-                          const SizedBox(height: 3),
-                          Text(
-                            detail!,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              color: Palette.muted,
-                              height: 1.35,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
+                    child: _StepTitle(title: title, detail: detail, done: done),
                   ),
                 ],
               ),
@@ -176,18 +153,59 @@ class _Step extends StatelessWidget {
               if (!done)
                 Padding(
                   padding: const EdgeInsets.only(left: 46, top: 14),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: FilledButton(
-                      style: FilledButton.styleFrom(minimumSize: const Size(0, 42)),
-                      onPressed: busy ? null : onPressed,
-                      child: Text(action),
-                    ),
-                  ),
+                  child: _StepButton(label: action, onPressed: busy ? null : onPressed),
                 ),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _StepTitle extends StatelessWidget {
+  const _StepTitle({required this.title, required this.detail, required this.done});
+
+  final String title;
+  final String? detail;
+  final bool done;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+            color: done ? Palette.muted : Palette.text,
+          ),
+        ),
+        if (detail != null) ...[
+          const SizedBox(height: 3),
+          Text(detail!, style: const TextStyle(fontSize: 13, color: Palette.muted, height: 1.35)),
+        ],
+      ],
+    );
+  }
+}
+
+class _StepButton extends StatelessWidget {
+  const _StepButton({required this.label, required this.onPressed});
+
+  final String label;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: FilledButton(
+        style: FilledButton.styleFrom(minimumSize: const Size(0, 42)),
+        onPressed: onPressed,
+        child: Text(label),
       ),
     );
   }
