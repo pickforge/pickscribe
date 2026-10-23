@@ -1,0 +1,7 @@
+.fvm/
+.dart_tool/
+.flutter-plugins-dependencies
+build/
+*.iml
+.idea/
+coverage/
