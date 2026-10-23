@@ -100,7 +100,7 @@ class BubbleView(context: Context) : View(context) {
         radius = size * 0.4f
         unit = radius / 10f
         shadow.shader = RadialGradient(
-            cx, cy + radius * 0.1f, radius * 1.22f,
+            cx, cy + radius * 0.1f, radius * SHADOW,
             intArrayOf(alpha(Color.BLACK, 0.5f), alpha(Color.BLACK, 0.32f), Color.TRANSPARENT),
             floatArrayOf(0f, 0.75f, 1f),
             Shader.TileMode.CLAMP,
@@ -110,7 +110,8 @@ class BubbleView(context: Context) : View(context) {
         )
         shine = LinearGradient(
             0f, cy - radius, 0f, cy + radius,
-            alpha(TEXT, 0.28f), alpha(TEXT, 0.05f),
+            // The lower edge stays visible, so the orb keeps its outline over a black app.
+            alpha(TEXT, 0.3f), alpha(TEXT, 0.14f),
             Shader.TileMode.CLAMP,
         )
         spark.shader = RadialGradient(
@@ -148,7 +149,7 @@ class BubbleView(context: Context) : View(context) {
             glow.alpha = ((0.25f + 0.75f * loud) * 255).toInt()
             canvas.drawCircle(cx, cy, size / 2f, glow)
         }
-        canvas.drawCircle(cx, cy + radius * 0.1f, radius * 1.22f, shadow)
+        canvas.drawCircle(cx, cy + radius * 0.1f, radius * SHADOW, shadow)
         canvas.drawCircle(cx, cy, radius, body)
         if (mode == Mode.LISTENING) {
             rim.shader = null
@@ -226,6 +227,9 @@ class BubbleView(context: Context) : View(context) {
         private val SHAPE = floatArrayOf(0.45f, 0.75f, 1f, 0.75f, 0.45f)
         private val SWAY = intArrayOf(3, 2, 4, 2, 3)
         private const val ARC_TURN = 0.7f
+
+        // The shadow's radius, so that it fades out before the bottom edge of the view.
+        private const val SHADOW = 1.15f
 
         private val EMBER = Color.parseColor("#FF7A1A")
         private val TEXT = Color.parseColor("#F2F2F3")
