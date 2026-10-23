@@ -48,18 +48,7 @@ class DictationService : AccessibilityService(), Bubble.Actions {
         refresh()
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent) {
-        if (event.packageName?.toString() != packageName && mayCopy(event)) TextInserter.keepClip()
-        refresh()
-    }
-
-    // A copy comes with a tap, a text selection, or a window change. Our own paste only moves
-    // the cursor.
-    private fun mayCopy(event: AccessibilityEvent) = when (event.eventType) {
-        AccessibilityEvent.TYPE_VIEW_CLICKED, AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> true
-        AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED -> event.fromIndex != event.toIndex
-        else -> false
-    }
+    override fun onAccessibilityEvent(event: AccessibilityEvent) = refresh()
 
     override fun onInterrupt() = Unit
 

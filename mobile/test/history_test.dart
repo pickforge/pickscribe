@@ -36,7 +36,9 @@ void main() {
     await store.add(_item('1', 100));
     final file = File('${dir.path}/history.jsonl');
     await file.writeAsString('{"id": "2", "at', mode: FileMode.append);
+    final torn = await file.readAsString();
     final again = await reload();
+    expect(await file.readAsString(), torn, reason: 'loading must not write');
     await again.add(_item('3', 300));
     expect((await reload()).items.map((item) => item.id), ['3', '1']);
   });

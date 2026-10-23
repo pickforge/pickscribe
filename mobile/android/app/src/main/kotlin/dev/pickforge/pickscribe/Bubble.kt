@@ -152,6 +152,8 @@ class Bubble(
         var dragging = false
         var pressedLong = false
         val longPressCheck = Runnable {
+            // A hidden bubble gets no ACTION_UP, so the check can outlive the press.
+            if (!shown) return@Runnable
             pressedLong = true
             view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
             actions.onLongPress()

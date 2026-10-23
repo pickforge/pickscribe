@@ -82,6 +82,9 @@ class HistoryStore extends ChangeNotifier {
   final int limit;
   List<HistoryItem> _items = [];
 
+  // True when the file may end in a line that a crash or a full disk cut short.
+  bool _torn = false;
+
   List<HistoryItem> get items => List.unmodifiable(_items);
 
   Future<void> load() async {
@@ -100,21 +103,27 @@ class HistoryStore extends ChangeNotifier {
           .toList()
           .reversed
           .toList();
-      // A crash during an append can leave a last line without its newline. The rewrite drops
-      // it, so the next append starts on a new line.
-      if (text.isNotEmpty && !text.endsWith('\n')) return _rewrite();
+      _torn = text.isNotEmpty && !text.endsWith('\n');
     }
     notifyListeners();
   }
 
-  Future<void> add(HistoryItem item) {
+  Future<void> add(HistoryItem item) async {
     _items.insert(0, item);
     if (_items.length > limit) {
       _items.removeRange(limit, _items.length);
       return _rewrite();
     }
     notifyListeners();
-    return _file.append('${jsonEncode(item.toJson())}\n');
+    // A new line after a cut-short one keeps that line from spoiling this item.
+    final line = '${_torn ? '\n' : ''}${jsonEncode(item.toJson())}\n';
+    _torn = false;
+    try {
+      await _file.append(line);
+    } on FileSystemException {
+      _torn = true;
+      rethrow;
+    }
   }
 
   Future<void> markDelivered(String id, bool delivered) {
