@@ -60,7 +60,7 @@ const models = [
     'Large Turbo',
     574041195,
     '394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2',
-    speed: 2,
+    speed: 1,
     accuracy: 5,
   ),
   WhisperModel(
@@ -68,13 +68,14 @@ const models = [
     'Large Turbo, 8-bit',
     874188075,
     '317eb69c11673c9de1e1f0d459b253999804ec71ac4c23c17ecf5fbe24e259a1',
-    speed: 1,
+    speed: 3,
     accuracy: 5,
   ),
 ];
 
-/// The model new installs download first.
-final recommendedModel = models.firstWhere((model) => model.file == 'ggml-large-v3-turbo-q5_0.bin');
+/// The model new installs download first. Phone CPUs run 8-bit weights about three times
+/// faster than 5-bit ones.
+final recommendedModel = models.firstWhere((model) => model.file == 'ggml-large-v3-turbo-q8_0.bin');
 
 WhisperModel? modelByFile(String? file) {
   for (final model in models) {

@@ -1,6 +1,7 @@
 // A small C surface over whisper.cpp for Dart FFI. It mirrors src/transcribe.rs on the
 // desktop: pick the most likely configured language, then decode with the glossary prompt.
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
@@ -42,14 +43,38 @@ std::vector<std::string> split_codes(const char *list) {
     return codes;
 }
 
+// The encoder window, in 20 ms steps, that covers the clip with room to spare. The default
+// 30 s window made short clips five times slower on a Galaxy S25 Ultra. Tighter windows than
+// this made the large models repeat words in the same tests.
+int32_t window_for(whisper_context *ctx, int32_t n_samples) {
+    const int32_t steps = n_samples / (2 * WHISPER_HOP_LENGTH) + 150;
+    return std::min(std::max(steps, 350), whisper_n_audio_ctx(ctx));
+}
+
+// whisper_full sets the audio window only after its own language detection, and the API has
+// no other way to set it. Stopping whisper_full before it encodes leaves the window and the
+// mel of the clip in the state, ready for detection.
+bool set_window(whisper_context *ctx, whisper_state *state, const float *pcm, int32_t n_samples,
+                int32_t window, int32_t threads) {
+    whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+    params.language = "en";
+    params.n_threads = threads;
+    params.audio_ctx = window;
+    params.print_progress = false;
+    params.encoder_begin_callback = [](whisper_context *, whisper_state *, void *) {
+        return false;
+    };
+    return whisper_full_with_state(ctx, state, params, pcm, n_samples) == 0;
+}
+
 // Free detection over all languages mislabels short Portuguese clips as Spanish or Galician
 // too often, so only the configured languages compete.
 const char *pick_language(whisper_context *ctx, whisper_state *state, const float *pcm,
                           int32_t n_samples, const std::vector<std::string> &codes,
-                          int32_t threads) {
-    if (codes.empty()) return "auto";
+                          int32_t window, int32_t threads) {
     if (codes.size() == 1) return whisper_lang_str(whisper_lang_id(codes[0].c_str()));
-    if (whisper_pcm_to_mel_with_state(ctx, state, pcm, n_samples, threads) != 0) return nullptr;
+    if (!set_window(ctx, state, pcm, n_samples, window, threads)) return nullptr;
+    if (codes.empty()) return "auto";
     std::vector<float> probabilities(whisper_lang_max_id() + 1, 0.0f);
     if (whisper_lang_auto_detect_with_state(ctx, state, 0, threads, probabilities.data()) < 0) {
         return nullptr;
@@ -88,6 +113,8 @@ PS_API int32_t ps_supported() {
 PS_API Model *ps_load(const char *model_path) {
     whisper_context_params params = whisper_context_default_params();
     params.use_gpu = false;
+    // Flash attention was slower on the phone's CPU and lost words with short windows.
+    params.flash_attn = false;
     whisper_context *ctx = whisper_init_from_file_with_params_no_state(model_path, params);
     if (ctx == nullptr) return nullptr;
     whisper_state *state = whisper_init_state(ctx);
@@ -120,8 +147,9 @@ PS_API int32_t ps_transcribe(Model *model, const float *pcm, int32_t n_samples,
     if (should_abort(model)) return 5;
     whisper_context *ctx = model->ctx;
     whisper_state *state = model->state;
+    const int32_t window = window_for(ctx, n_samples);
     const char *language =
-        pick_language(ctx, state, pcm, n_samples, split_codes(languages), threads);
+        pick_language(ctx, state, pcm, n_samples, split_codes(languages), window, threads);
     if (language == nullptr) return 2;
     if (should_abort(model)) return 5;
     whisper_full_params params = whisper_full_default_params(
@@ -133,6 +161,7 @@ PS_API int32_t ps_transcribe(Model *model, const float *pcm, int32_t n_samples,
     params.language = language;
     params.initial_prompt = (prompt != nullptr && *prompt != '\0') ? prompt : nullptr;
     params.n_threads = threads;
+    params.audio_ctx = window;
     params.no_context = true;
     params.no_timestamps = true;
     params.suppress_blank = true;
