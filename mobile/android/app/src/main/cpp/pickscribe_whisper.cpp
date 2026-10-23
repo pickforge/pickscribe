@@ -143,14 +143,20 @@ PS_API int32_t ps_transcribe(Model *model, const float *pcm, int32_t n_samples,
                              const char *languages, const char *prompt, int32_t threads,
                              int32_t beam_size, char **out_text, const char **out_language) {
     if (should_abort(model)) return 5;
+    // whisper_full skips clips under 100 ms, and with no new mel it would read the last clip's.
+    if (n_samples < WHISPER_SAMPLE_RATE / 10) {
+        *out_text = copy_string("");
+        *out_language = "auto";
+        return *out_text == nullptr ? 4 : 0;
+    }
     whisper_context *ctx = model->ctx;
     whisper_state *state = model->state;
     const int32_t window = window_for(ctx, n_samples);
     const std::vector<std::string> codes = split_codes(languages);
-    const bool detect = codes.size() != 1;
+    const int single = codes.size() == 1 ? whisper_lang_id(codes[0].c_str()) : -1;
+    const bool detect = single < 0;
     if (detect && !set_window(ctx, state, pcm, n_samples, window, threads)) return 2;
-    const char *language = detect ? pick_language(ctx, state, codes, threads)
-                                  : whisper_lang_str(whisper_lang_id(codes[0].c_str()));
+    const char *language = detect ? pick_language(ctx, state, codes, threads) : whisper_lang_str(single);
     if (language == nullptr) return 2;
     if (should_abort(model)) return 5;
     whisper_full_params params = whisper_full_default_params(

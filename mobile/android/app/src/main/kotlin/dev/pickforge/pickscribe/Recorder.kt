@@ -13,6 +13,9 @@ class Recorder {
     private var thread: Thread? = null
     private val chunks = mutableListOf<FloatArray>()
 
+    // How many chunks takeNew or stop has already returned.
+    private var taken = 0
+
     /** Loudness of the latest chunk, from 0 to 1, for the bubble's waveform. */
     @Volatile
     var level = 0f
@@ -23,6 +26,10 @@ class Recorder {
      * microphone. From Android 10, the system silences a second recorder instead of refusing it.
      */
     var silenced = false
+        private set
+
+    /** Samples in the last recording. */
+    var length = 0
         private set
 
     // The callers check RECORD_AUDIO before they start a recording.
@@ -38,7 +45,10 @@ class Recorder {
             audio.release()
             error("the microphone is unavailable")
         }
-        synchronized(chunks) { chunks.clear() }
+        synchronized(chunks) {
+            chunks.clear()
+            taken = 0
+        }
         audio.startRecording()
         if (audio.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
             audio.release()
@@ -48,7 +58,10 @@ class Recorder {
         thread = Thread({ pump(audio) }, "pickscribe-recorder").also { it.start() }
     }
 
-    /** Stops the recording and returns every sample. */
+    /** Returns the samples recorded since the last call, so they can stream while recording. */
+    fun takeNew(): FloatArray = synchronized(chunks) { takeRest() }
+
+    /** Stops the recording and returns the samples that [takeNew] has not returned yet. */
     fun stop(): FloatArray {
         val audio = record ?: return FloatArray(0)
         record = null
@@ -60,16 +73,25 @@ class Recorder {
         audio.release()
         level = 0f
         return synchronized(chunks) {
-            val out = FloatArray(chunks.sumOf { it.size })
-            var offset = 0
-            for (chunk in chunks) {
-                chunk.copyInto(out, offset)
-                offset += chunk.size
-            }
+            length = chunks.sumOf { it.size }
+            silenced = flagged && chunks.all { chunk -> chunk.all { it == 0f } }
+            val rest = takeRest()
             chunks.clear()
-            silenced = flagged && out.all { it == 0f }
-            out
+            rest
         }
+    }
+
+    // Callers hold the chunks lock.
+    private fun takeRest(): FloatArray {
+        val fresh = chunks.subList(taken, chunks.size)
+        val out = FloatArray(fresh.sumOf { it.size })
+        var offset = 0
+        for (chunk in fresh) {
+            chunk.copyInto(out, offset)
+            offset += chunk.size
+        }
+        taken = chunks.size
+        return out
     }
 
     private fun pump(audio: AudioRecord) {
