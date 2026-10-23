@@ -64,9 +64,26 @@ class WhisperException implements Exception {
   String toString() => message;
 }
 
+/// What the pipeline needs from a loaded speech model, so tests can stand in for Whisper.
+abstract interface class Transcriber {
+  Future<Transcription> transcribe(
+    Float32List pcm, {
+    required List<String> languages,
+    String prompt,
+    int threads,
+    int beamSize,
+  });
+
+  void abort();
+
+  void clearAbort();
+
+  void dispose();
+}
+
 /// A loaded Whisper model. Calls block for seconds, so each one runs on its own isolate,
 /// and the native context travels between isolates as an address.
-class Whisper {
+class Whisper implements Transcriber {
   Whisper._(this._address);
 
   final int _address;
@@ -91,13 +108,16 @@ class Whisper {
 
   /// Stops the transcription in progress, which then throws [WhisperCancelled]. Call
   /// [clearAbort] before the next one.
+  @override
   void abort() => _setAbort(Pointer.fromAddress(_address), 1);
 
+  @override
   void clearAbort() => _setAbort(Pointer.fromAddress(_address), 0);
 
   /// Transcribes 16 kHz mono audio. With more than one language, the most likely of them
   /// wins. A beam size of 1 decodes greedily, which is faster. Calls must not overlap, since
   /// they share the model's state.
+  @override
   Future<Transcription> transcribe(
     Float32List pcm, {
     required List<String> languages,
@@ -143,6 +163,7 @@ class Whisper {
     });
   }
 
+  @override
   void dispose() {
     _open().lookupFunction<_UnloadNative, _Unload>('ps_unload')(Pointer.fromAddress(_address));
   }

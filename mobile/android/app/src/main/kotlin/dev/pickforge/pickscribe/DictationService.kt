@@ -5,6 +5,8 @@ import android.accessibilityservice.AccessibilityService
 import android.content.SharedPreferences
 import android.content.res.Configuration
 import android.content.pm.PackageManager
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -23,6 +25,17 @@ class DictationService : AccessibilityService(), Bubble.Actions {
     private lateinit var bubble: Bubble
     private lateinit var pipeline: MethodChannel
     private val recorder = Recorder()
+    private val main = Handler(Looper.getMainLooper())
+
+    // Sends the audio to the pipeline while the user speaks, so it can transcribe finished parts.
+    private val streamAudio = object : Runnable {
+        override fun run() {
+            if (state != State.LISTENING) return
+            val pcm = recorder.takeNew()
+            if (pcm.isNotEmpty()) pipeline.invokeMethod("audio", mapOf("session" to session, "pcm" to pcm))
+            main.postDelayed(this, STREAM_MS)
+        }
+    }
     private var state = State.IDLE
     private var raw = false
     private var field: AccessibilityNodeInfo? = null
@@ -32,6 +45,11 @@ class DictationService : AccessibilityService(), Bubble.Actions {
 
     // Each dictation gets a number, so a result that arrives after a cancel is dropped.
     private var session = 0
+
+    // After a cold start, Dart keeps only the newest message until its pipeline listens. So
+    // nothing else goes out before Dart answers "begin", and the recorder keeps the audio.
+    private var begun = false
+    private var finishWhenBegun: (() -> Unit)? = null
     private var lastVisibility: String? = null
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
         bubble.applyPrefs()
@@ -59,14 +77,11 @@ class DictationService : AccessibilityService(), Bubble.Actions {
 
     override fun onDestroy() {
         // A result that arrives after this point must not touch the clipboard or the windows.
-        when (state) {
-            State.LISTENING -> recorder.stop()
-            State.THINKING -> pipeline.invokeMethod("cancel", null)
-            State.IDLE -> Unit
-        }
+        if (state != State.IDLE) stopWork()
         session++
         state = State.IDLE
         field = null
+        finishWhenBegun = null
         // The system can unbind the service before it connects.
         if (::prefs.isInitialized) prefs.stopListening(prefsListener)
         if (::bubble.isInitialized) bubble.destroy()
@@ -147,56 +162,92 @@ class DictationService : AccessibilityService(), Bubble.Actions {
         this.raw = raw
         session++
         state = State.LISTENING
+        begun = false
+        finishWhenBegun = null
+        val mine = session
+        // The pipeline loads the model now, while the user speaks.
+        pipeline.invokeMethod(
+            "begin",
+            mapOf("session" to session),
+            object : MethodChannel.Result {
+                override fun success(result: Any?) {
+                    if (mine != session || state == State.IDLE) return
+                    begun = true
+                    val send = finishWhenBegun
+                    finishWhenBegun = null
+                    if (state == State.LISTENING) main.post(streamAudio) else send?.invoke()
+                }
+
+                override fun error(code: String, message: String?, details: Any?) {
+                    if (mine == session) cancel()
+                }
+
+                override fun notImplemented() {
+                    if (mine == session) cancel()
+                }
+            },
+        )
         bubble.view.listening(raw) { recorder.level }
     }
 
     private fun stop() {
-        val pcm = recorder.stop()
+        main.removeCallbacks(streamAudio)
+        val rest = recorder.stop()
         val mine = session
-        if (recorder.silenced) {
-            say(R.string.microphone_unavailable)
-            finish()
-            return
+        val problem = when {
+            recorder.silenced -> R.string.microphone_unavailable
+            recorder.length < Recorder.RATE / 4 -> R.string.too_short
+            else -> null
         }
-        if (pcm.size < Recorder.RATE / 4) {
-            say(R.string.too_short)
+        if (problem != null) {
+            pipeline.invokeMethod("cancel", null)
+            say(problem)
             finish()
             return
         }
         state = State.THINKING
         bubble.view.thinking()
         val app = field?.packageName?.toString()
-        pipeline.invokeMethod(
-            "process",
-            mapOf("pcm" to pcm, "raw" to raw, "app" to app),
-            object : MethodChannel.Result {
-                override fun success(result: Any?) {
-                    if (mine == session) deliver(result as? Map<*, *>)
-                }
+        val send = {
+            pipeline.invokeMethod(
+                "finish",
+                mapOf("session" to mine, "pcm" to rest, "raw" to raw, "app" to app),
+                object : MethodChannel.Result {
+                    override fun success(result: Any?) {
+                        if (mine == session) deliver(result as? Map<*, *>)
+                    }
 
-                override fun error(code: String, message: String?, details: Any?) {
-                    if (mine != session) return
-                    say(message ?: code)
-                    finish()
-                }
+                    override fun error(code: String, message: String?, details: Any?) {
+                        if (mine != session) return
+                        say(message ?: code)
+                        finish()
+                    }
 
-                override fun notImplemented() {
-                    if (mine == session) finish()
-                }
-            },
-        )
+                    override fun notImplemented() {
+                        if (mine == session) finish()
+                    }
+                },
+            )
+        }
+        if (begun) send() else finishWhenBegun = send
     }
 
     /** Stops a recording or drops the transcription in progress, without inserting anything. */
     private fun cancel() {
-        when (state) {
-            State.IDLE -> return
-            State.LISTENING -> recorder.stop()
-            State.THINKING -> pipeline.invokeMethod("cancel", null)
-        }
+        if (state == State.IDLE) return
+        stopWork()
         session++
         say(R.string.cancelled)
         finish()
+    }
+
+    // Parts of a recording may be transcribing while it is still going, so both states cancel.
+    private fun stopWork() {
+        if (state == State.LISTENING) {
+            main.removeCallbacks(streamAudio)
+            recorder.stop()
+        }
+        pipeline.invokeMethod("cancel", null)
     }
 
     private fun deliver(result: Map<*, *>?) {
@@ -215,6 +266,7 @@ class DictationService : AccessibilityService(), Bubble.Actions {
 
     private fun finish() {
         field = null
+        finishWhenBegun = null
         state = State.IDLE
         bubble.view.idle()
         refresh()
@@ -226,6 +278,7 @@ class DictationService : AccessibilityService(), Bubble.Actions {
 
     companion object {
         const val PIPELINE_CHANNEL = "pickscribe/pipeline"
+        private const val STREAM_MS = 200L
         private const val TAG = "PickScribe"
     }
 }
