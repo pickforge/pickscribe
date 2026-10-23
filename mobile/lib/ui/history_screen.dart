@@ -162,7 +162,6 @@ class _HistoryTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final services = ServicesScope.of(context);
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Dismissible(
@@ -177,20 +176,7 @@ class _HistoryTile extends StatelessWidget {
           ),
           child: const Icon(Icons.delete_outline_rounded, color: Palette.danger),
         ),
-        onDismissed: (_) {
-          services.history.remove(item.id);
-          ScaffoldMessenger.of(context)
-            ..hideCurrentSnackBar()
-            ..showSnackBar(
-              SnackBar(
-                content: const Text('Dictation deleted'),
-                action: SnackBarAction(
-                  label: 'Undo',
-                  onPressed: () => services.history.restore(item),
-                ),
-              ),
-            );
-        },
+        onDismissed: (_) => _delete(context, item),
         child: SurfaceCard(
           child: InkWell(
             onTap: () => _showDetails(context, item),
@@ -256,6 +242,19 @@ class _Meta extends StatelessWidget {
   }
 }
 
+void _delete(BuildContext context, HistoryItem item) {
+  final history = ServicesScope.of(context).history;
+  history.remove(item.id);
+  ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(
+      SnackBar(
+        content: const Text('Dictation deleted'),
+        action: SnackBarAction(label: 'Undo', onPressed: () => history.restore(item)),
+      ),
+    );
+}
+
 void _copy(BuildContext context, String text) {
   Clipboard.setData(ClipboardData(text: text));
   ScaffoldMessenger.of(context)
@@ -264,7 +263,6 @@ void _copy(BuildContext context, String text) {
 }
 
 void _showDetails(BuildContext context, HistoryItem item) {
-  final services = ServicesScope.of(context);
   showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
@@ -284,21 +282,23 @@ void _showDetails(BuildContext context, HistoryItem item) {
               const SizedBox(height: 12),
               Flexible(
                 child: SingleChildScrollView(
-                  child: SelectableText(
-                    item.text,
-                    style: const TextStyle(fontSize: 17, height: 1.5),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      SelectableText(item.text, style: const TextStyle(fontSize: 17, height: 1.5)),
+                      if (item.transcript != item.text) ...[
+                        const SizedBox(height: 16),
+                        Text('WHISPER HEARD', style: Theme.of(sheet).textTheme.labelSmall),
+                        const SizedBox(height: 6),
+                        SelectableText(
+                          item.transcript,
+                          style: const TextStyle(color: Palette.muted, height: 1.45),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
               ),
-              if (item.transcript != item.text) ...[
-                const SizedBox(height: 16),
-                Text('WHISPER HEARD', style: Theme.of(sheet).textTheme.labelSmall),
-                const SizedBox(height: 6),
-                SelectableText(
-                  item.transcript,
-                  style: const TextStyle(color: Palette.muted, height: 1.45),
-                ),
-              ],
               const SizedBox(height: 20),
               Row(
                 children: [
@@ -309,7 +309,7 @@ void _showDetails(BuildContext context, HistoryItem item) {
                       label: const Text('Delete'),
                       onPressed: () {
                         Navigator.pop(sheet);
-                        services.history.remove(item.id);
+                        _delete(context, item);
                       },
                     ),
                   ),
@@ -358,9 +358,9 @@ class _StatusBanner extends StatelessWidget {
             title: 'Finish setup',
             subtitle: 'Still needed: ${missing.join(', ')}',
             action: 'Open',
-            onPressed: () => Navigator.of(
-              context,
-            ).push(MaterialPageRoute<void>(builder: (_) => const OnboardingScreen())),
+            onPressed: () =>
+                Navigator.of(context)
+                    .push(MaterialPageRoute<void>(builder: (_) => const OnboardingScreen())),
           );
         }
         final now = DateTime.now();

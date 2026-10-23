@@ -59,9 +59,8 @@ void main() {
   });
 
   test('skips lines that do not parse', () async {
-    await File(
-      '${dir.path}/history.jsonl',
-    ).writeAsString('{"id":"1","at":100,"text":"ok"}\nnot json\n{"id":2}\n');
+    await File('${dir.path}/history.jsonl')
+        .writeAsString('{"id":"1","at":100,"text":"ok"}\nnot json\n{"id":2}\n');
     final store = await reload();
     expect(store.items.single.text, 'ok');
     expect(store.items.single.transcript, 'ok');

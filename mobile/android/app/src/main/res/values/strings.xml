@@ -10,7 +10,7 @@
     <string name="snooze_cancel">Keep it</string>
     <string name="microphone_needed">Open PickScribe and allow the microphone.</string>
     <string name="microphone_unavailable">Another app is using the microphone.</string>
-    <string name="paste_failed">This field refused the text. It is on the clipboard and in History.</string>
+    <string name="paste_failed">Could not insert the text. It is on the clipboard and in History.</string>
     <string name="too_short">Too short. Tap, speak, then tap again.</string>
     <string name="cancelled">Cancelled</string>
     <string name="nothing_heard">No speech heard</string>

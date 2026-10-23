@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import 'storage.dart';
+
 const _arrow = '->';
 const _maxLength = 100;
 
@@ -147,15 +149,17 @@ bool _isWordChar(int rune) => _wordChar.hasMatch(String.fromCharCode(rune));
 
 /// The dictionary file, `dictionary.txt` in the app's private storage, in the desktop format.
 class DictionaryStore extends ChangeNotifier {
-  DictionaryStore(Directory dir) : _file = File('${dir.path}/dictionary.txt');
+  DictionaryStore(Directory dir) : _file = SafeFile(File('${dir.path}/dictionary.txt'));
 
-  final File _file;
+  final SafeFile _file;
   Dictionary _dictionary = Dictionary();
 
   Dictionary get dictionary => _dictionary;
 
   Future<void> load() async {
-    if (await _file.exists()) _dictionary = Dictionary.parse(await _file.readAsString());
+    if (await _file.file.exists()) {
+      _dictionary = Dictionary.parse(await _file.file.readAsString());
+    }
     notifyListeners();
   }
 
@@ -172,6 +176,6 @@ class DictionaryStore extends ChangeNotifier {
 
   Future<void> _save() async {
     notifyListeners();
-    await _file.writeAsString(_dictionary.serialize(), flush: true);
+    await _file.write(_dictionary.serialize());
   }
 }

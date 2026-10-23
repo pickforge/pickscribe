@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import 'storage.dart';
+
 /// Languages offered for dictation, by Whisper code.
 const languageNames = {
   'pt': 'Portuguese',
@@ -69,10 +71,10 @@ class TranscriptionSettings {
 
 class SettingsStore extends ChangeNotifier {
   SettingsStore(Directory dir)
-    : _file = File('${dir.path}/transcription.json'),
+    : _file = SafeFile(File('${dir.path}/transcription.json')),
       _legacy = File('${dir.path}/dictation.json');
 
-  final File _file;
+  final SafeFile _file;
 
   // The first prototype saved only the model, with slower decoding, in this file.
   final File _legacy;
@@ -82,9 +84,9 @@ class SettingsStore extends ChangeNotifier {
 
   Future<void> load() async {
     try {
-      if (await _file.exists()) {
+      if (await _file.file.exists()) {
         _settings = TranscriptionSettings.fromJson(
-          jsonDecode(await _file.readAsString()) as Map<String, Object?>,
+          jsonDecode(await _file.file.readAsString()) as Map<String, Object?>,
         );
       } else if (await _legacy.exists()) {
         final legacy = jsonDecode(await _legacy.readAsString()) as Map<String, Object?>;
@@ -99,6 +101,6 @@ class SettingsStore extends ChangeNotifier {
   Future<void> update(TranscriptionSettings settings) async {
     _settings = settings;
     notifyListeners();
-    await _file.writeAsString(jsonEncode(settings.toJson()), flush: true);
+    await _file.write(jsonEncode(settings.toJson()));
   }
 }

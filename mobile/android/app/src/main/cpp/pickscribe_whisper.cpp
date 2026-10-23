@@ -8,6 +8,11 @@
 #include <string>
 #include <vector>
 
+#if defined(__aarch64__)
+#include <asm/hwcap.h>
+#include <sys/auxv.h>
+#endif
+
 #include "whisper.h"
 
 #define PS_API extern "C" __attribute__((visibility("default")))
@@ -69,6 +74,17 @@ char *copy_string(const std::string &text) {
 
 }  // namespace
 
+// Returns 1 when the CPU has the instructions ggml was built for. This file is built without
+// them, so the check itself runs on any arm64 phone.
+PS_API int32_t ps_supported() {
+#if defined(__aarch64__)
+    const unsigned long caps = getauxval(AT_HWCAP);
+    return (caps & HWCAP_ASIMDDP) != 0 && (caps & HWCAP_FPHP) != 0 ? 1 : 0;
+#else
+    return 1;
+#endif
+}
+
 PS_API Model *ps_load(const char *model_path) {
     whisper_context_params params = whisper_context_default_params();
     params.use_gpu = false;
@@ -101,6 +117,7 @@ PS_API void ps_set_abort(Model *model, int32_t abort) {
 PS_API int32_t ps_transcribe(Model *model, const float *pcm, int32_t n_samples,
                              const char *languages, const char *prompt, int32_t threads,
                              int32_t beam_size, char **out_text, const char **out_language) {
+    if (should_abort(model)) return 5;
     whisper_context *ctx = model->ctx;
     whisper_state *state = model->state;
     const char *language =

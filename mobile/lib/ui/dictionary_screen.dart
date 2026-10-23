@@ -71,17 +71,7 @@ class _EntryRow extends StatelessWidget {
         color: Palette.danger.withValues(alpha: 0.16),
         child: const Icon(Icons.delete_outline_rounded, color: Palette.danger),
       ),
-      onDismissed: (_) {
-        store.remove(entry);
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(
-            SnackBar(
-              content: Text('Removed ${entry.text}'),
-              action: SnackBarAction(label: 'Undo', onPressed: () => store.add(entry)),
-            ),
-          );
-      },
+      onDismissed: (_) => _remove(context, store),
       child: ListTile(
         minTileHeight: 56,
         title: Text(entry.text, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
@@ -105,10 +95,22 @@ class _EntryRow extends StatelessWidget {
         trailing: IconButton(
           tooltip: 'Remove',
           icon: const Icon(Icons.close_rounded, size: 20, color: Palette.faint),
-          onPressed: () => store.remove(entry),
+          onPressed: () => _remove(context, store),
         ),
       ),
     );
+  }
+
+  void _remove(BuildContext context, DictionaryStore store) {
+    store.remove(entry);
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text('Removed ${entry.text}'),
+          action: SnackBarAction(label: 'Undo', onPressed: () => store.add(entry)),
+        ),
+      );
   }
 }
 

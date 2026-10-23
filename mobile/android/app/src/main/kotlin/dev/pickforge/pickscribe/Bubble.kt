@@ -9,6 +9,7 @@ import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.content.res.ColorStateList
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -73,11 +74,25 @@ class Bubble(
         params.width = sizePx()
         params.height = sizePx()
         view.alpha = prefs.opacity
+        placeAtSaved()
+    }
+
+    private fun placeAtSaved() {
         val saved = prefs.position
         val screen = context.resources.displayMetrics
-        params.x = saved?.first ?: (screen.widthPixels - params.width - dp(8))
-        params.y = saved?.second ?: (screen.heightPixels * 0.42f).toInt()
+        place(
+            saved?.first ?: (screen.widthPixels - params.width - dp(8)),
+            saved?.second ?: (screen.heightPixels * 0.42f).toInt(),
+        )
         if (shown) windows.updateViewLayout(view, params)
+    }
+
+    // Keeps the whole bubble on screen, since a position saved in another orientation or on
+    // another display can lie outside this one.
+    private fun place(x: Int, y: Int) {
+        val screen = context.resources.displayMetrics
+        params.x = x.coerceIn(0, maxOf(0, screen.widthPixels - params.width))
+        params.y = y.coerceIn(0, maxOf(0, screen.heightPixels - params.height))
     }
 
     /** Shows a short message beside the bubble, since toasts from a background app are hidden. */
@@ -137,6 +152,7 @@ class Bubble(
         var pressedLong = false
         val longPressCheck = Runnable {
             pressedLong = true
+            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
             actions.onLongPress()
         }
         view.setOnTouchListener { _, event ->
@@ -170,7 +186,10 @@ class Bubble(
                     view.removeCallbacks(longPressCheck)
                     when {
                         dragging -> finishDrag()
-                        !pressedLong -> actions.onTap()
+                        !pressedLong -> {
+                            view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                            actions.onTap()
+                        }
                     }
                 }
                 MotionEvent.ACTION_CANCEL -> {
@@ -186,18 +205,13 @@ class Bubble(
         val overTarget = isOverTarget()
         hideTarget()
         if (overTarget) {
-            returnToSavedPosition()
+            placeAtSaved()
             actions.onDropped()
         } else {
+            place(params.x, params.y)
+            if (shown) windows.updateViewLayout(view, params)
             prefs.savePosition(params.x, params.y)
         }
-    }
-
-    private fun returnToSavedPosition() {
-        val saved = prefs.position
-        params.x = saved?.first ?: params.x
-        params.y = saved?.second ?: params.y
-        if (shown) windows.updateViewLayout(view, params)
     }
 
     private fun targetCenter(): Pair<Float, Float> {
@@ -245,6 +259,7 @@ class Bubble(
         target = null
     }
 
+    @SuppressLint("ClickableViewAccessibility")
     fun showSnoozeMenu() {
         hide()
         val panel = LinearLayout(context).apply {
@@ -275,8 +290,18 @@ class Bubble(
             panel.addView(menuRow(label, TEXT) { closeMenu(); actions.onSnooze(choice) })
         }
         panel.addView(menuRow(R.string.snooze_cancel, EMBER) { closeMenu(); show() })
-        val layout = overlayParams(dp(296), WindowManager.LayoutParams.WRAP_CONTENT)
-            .apply { gravity = Gravity.CENTER }
+        // This window cannot get the Back key, so a touch anywhere else keeps the bubble too.
+        panel.setOnTouchListener { _, event ->
+            if (event.actionMasked == MotionEvent.ACTION_OUTSIDE) {
+                closeMenu()
+                show()
+            }
+            false
+        }
+        val layout = overlayParams(dp(296), WindowManager.LayoutParams.WRAP_CONTENT).apply {
+            gravity = Gravity.CENTER
+            flags = flags or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
+        }
         windows.addView(panel, layout)
         menu = panel
     }

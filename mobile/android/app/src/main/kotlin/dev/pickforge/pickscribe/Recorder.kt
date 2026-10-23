@@ -29,6 +29,10 @@ class Recorder {
         check(audio.state == AudioRecord.STATE_INITIALIZED) { "the microphone is unavailable" }
         synchronized(chunks) { chunks.clear() }
         audio.startRecording()
+        if (audio.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+            audio.release()
+            error("the microphone is busy")
+        }
         record = audio
         thread = Thread({ pump(audio) }, "pickscribe-recorder").also { it.start() }
     }

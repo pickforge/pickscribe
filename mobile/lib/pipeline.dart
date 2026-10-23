@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
@@ -105,7 +107,12 @@ class Pipeline {
       audioMs: audioMs,
       app: app,
     );
-    await history.add(item);
+    try {
+      await history.add(item);
+    } on FileSystemException {
+      // A full disk must not cost the dictation, so the text still goes to the field.
+      return {'text': text};
+    }
     return {'id': item.id, 'text': text};
   }
 

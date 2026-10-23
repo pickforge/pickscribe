@@ -3,6 +3,7 @@ package dev.pickforge.pickscribe
 import android.Manifest
 import android.accessibilityservice.AccessibilityService
 import android.content.SharedPreferences
+import android.content.res.Configuration
 import android.content.pm.PackageManager
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
@@ -26,6 +27,9 @@ class DictationService : AccessibilityService(), Bubble.Actions {
     private var raw = false
     private var field: AccessibilityNodeInfo? = null
 
+    // The app the bubble was last shown over, for "Always in this app" after focus moves.
+    private var bubbleApp: String? = null
+
     // Each dictation gets a number, so a result that arrives after a cancel is dropped.
     private var session = 0
     private var lastVisibility: String? = null
@@ -48,8 +52,21 @@ class DictationService : AccessibilityService(), Bubble.Actions {
 
     override fun onInterrupt() = Unit
 
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (::bubble.isInitialized) bubble.applyPrefs()
+    }
+
     override fun onDestroy() {
-        if (state == State.LISTENING) recorder.stop()
+        // A result that arrives after this point must not touch the clipboard or the windows.
+        when (state) {
+            State.LISTENING -> recorder.stop()
+            State.THINKING -> pipeline.invokeMethod("cancel", null)
+            State.IDLE -> Unit
+        }
+        session++
+        state = State.IDLE
+        field = null
         prefs.stopListening(prefsListener)
         bubble.destroy()
         super.onDestroy()
@@ -69,7 +86,12 @@ class DictationService : AccessibilityService(), Bubble.Actions {
             else -> null
         }
         logVisibility(app, hiddenBecause)
-        if (hiddenBecause == null) bubble.show() else bubble.hide()
+        if (hiddenBecause == null) {
+            bubbleApp = app
+            bubble.show()
+        } else {
+            bubble.hide()
+        }
     }
 
     // Logs only the app and the reason, never field contents, and only when they change.
@@ -104,8 +126,7 @@ class DictationService : AccessibilityService(), Bubble.Actions {
             Bubble.Snooze.MINUTES_15 -> prefs.snooze(15)
             Bubble.Snooze.HOUR -> prefs.snooze(60)
             Bubble.Snooze.TOMORROW -> prefs.snoozeUntilTomorrow()
-            Bubble.Snooze.ALWAYS_HERE ->
-                findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.packageName?.toString()?.let(prefs::block)
+            Bubble.Snooze.ALWAYS_HERE -> bubbleApp?.let(prefs::block)
         }
         refresh()
     }

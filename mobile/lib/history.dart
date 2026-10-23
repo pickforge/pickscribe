@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import 'storage.dart';
+
 /// One dictation. History is the only place dictated text is stored, and audio is never kept.
 @immutable
 class HistoryItem {
@@ -73,18 +75,18 @@ class HistoryItem {
 /// Recent dictations in `history.jsonl` in the app's private storage, oldest first on disk
 /// and newest first in [items]. Lines that do not parse are skipped.
 class HistoryStore extends ChangeNotifier {
-  HistoryStore(Directory dir, {this.limit = 1000}) : _file = File('${dir.path}/history.jsonl');
+  HistoryStore(Directory dir, {this.limit = 1000})
+    : _file = SafeFile(File('${dir.path}/history.jsonl'));
 
-  final File _file;
+  final SafeFile _file;
   final int limit;
   List<HistoryItem> _items = [];
-  Future<void> _writes = Future.value();
 
   List<HistoryItem> get items => List.unmodifiable(_items);
 
   Future<void> load() async {
-    if (await _file.exists()) {
-      final lines = await _file.readAsLines();
+    if (await _file.file.exists()) {
+      final lines = await _file.file.readAsLines();
       _items = lines
           .map((line) {
             try {
@@ -108,10 +110,7 @@ class HistoryStore extends ChangeNotifier {
       return _rewrite();
     }
     notifyListeners();
-    return _write(
-      () =>
-          _file.writeAsString('${jsonEncode(item.toJson())}\n', mode: FileMode.append, flush: true),
-    );
+    return _file.append('${jsonEncode(item.toJson())}\n');
   }
 
   Future<void> markDelivered(String id, bool delivered) {
@@ -141,14 +140,6 @@ class HistoryStore extends ChangeNotifier {
   Future<void> _rewrite() {
     notifyListeners();
     final text = _items.reversed.map((item) => '${jsonEncode(item.toJson())}\n').join();
-    return _write(() => _file.writeAsString(text, flush: true));
-  }
-
-  // Writes run one at a time, in order, so an append never races a rewrite. A failed write
-  // reaches its caller and does not block the ones after it.
-  Future<void> _write(Future<void> Function() write) {
-    final next = _writes.then((_) => write());
-    _writes = next.catchError((Object _) {});
-    return next;
+    return _file.write(text);
   }
 }

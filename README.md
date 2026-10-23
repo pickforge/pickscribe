@@ -133,6 +133,8 @@ Audio never leaves your machine. With Right Alt, the transcript text and your di
 
 Recent dictations stay in `~/.local/share/pickscribe/history.jsonl`, readable only by you. Set `history_limit = 0` to keep none. Clipboard managers, such as Omarchy's clipboard history, keep their own copy of pasted text. See [SECURITY.md](SECURITY.md).
 
+The Android app in `mobile/` keeps audio and text on the phone. It pastes through the clipboard, so a keyboard's clipboard history or a cross-device clipboard sync may keep a copy. See [SECURITY.md](SECURITY.md#android-app).
+
 ## Development
 
 ```bash

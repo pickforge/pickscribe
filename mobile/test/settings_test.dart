@@ -10,9 +10,8 @@ void main() {
   tearDown(() => dir.delete(recursive: true));
 
   test('takes only the model from the prototype file, so decoding gets the fast default', () async {
-    await File(
-      '${dir.path}/dictation.json',
-    ).writeAsString('{"model":"ggml-base.bin","beam_size":5,"threads":6}');
+    await File('${dir.path}/dictation.json')
+        .writeAsString('{"model":"ggml-base.bin","beam_size":5,"threads":6}');
     final store = SettingsStore(dir);
     await store.load();
     expect(store.settings.model, 'ggml-base.bin');

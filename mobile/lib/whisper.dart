@@ -7,34 +7,34 @@ import 'package:ffi/ffi.dart';
 typedef _LoadNative = Pointer<Void> Function(Pointer<Utf8>);
 typedef _UnloadNative = Void Function(Pointer<Void>);
 typedef _Unload = void Function(Pointer<Void>);
-typedef _TranscribeNative =
-    Int32 Function(
-      Pointer<Void>,
-      Pointer<Float>,
-      Int32,
-      Pointer<Utf8>,
-      Pointer<Utf8>,
-      Int32,
-      Int32,
-      Pointer<Pointer<Utf8>>,
-      Pointer<Pointer<Utf8>>,
-    );
-typedef _Transcribe =
-    int Function(
-      Pointer<Void>,
-      Pointer<Float>,
-      int,
-      Pointer<Utf8>,
-      Pointer<Utf8>,
-      int,
-      int,
-      Pointer<Pointer<Utf8>>,
-      Pointer<Pointer<Utf8>>,
-    );
+typedef _TranscribeNative = Int32 Function(
+  Pointer<Void>,
+  Pointer<Float>,
+  Int32,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Int32,
+  Int32,
+  Pointer<Pointer<Utf8>>,
+  Pointer<Pointer<Utf8>>,
+);
+typedef _Transcribe = int Function(
+  Pointer<Void>,
+  Pointer<Float>,
+  int,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  int,
+  int,
+  Pointer<Pointer<Utf8>>,
+  Pointer<Pointer<Utf8>>,
+);
 typedef _FreeStringNative = Void Function(Pointer<Utf8>);
 typedef _FreeString = void Function(Pointer<Utf8>);
 typedef _SetAbortNative = Void Function(Pointer<Void>, Int32);
 typedef _SetAbort = void Function(Pointer<Void>, int);
+typedef _SupportedNative = Int32 Function();
+typedef _Supported = int Function();
 
 DynamicLibrary _open() => DynamicLibrary.open('libpickscribe_whisper.so');
 
@@ -72,6 +72,10 @@ class Whisper {
   final int _address;
 
   static Future<Whisper> load(String modelPath) async {
+    final supported = _open().lookupFunction<_SupportedNative, _Supported>('ps_supported');
+    if (supported() == 0) {
+      throw const WhisperException('This phone\'s processor is too old for on-device Whisper.');
+    }
     final address = await Isolate.run(() {
       final load = _open().lookupFunction<_LoadNative, _LoadNative>('ps_load');
       final path = modelPath.toNativeUtf8();
