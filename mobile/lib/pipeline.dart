@@ -101,7 +101,7 @@ class Pipeline {
     // Timings only: logs never hold dictated text.
     debugPrint(
       'PickScribe: ${settings.settings.model}, ${audioMs}ms audio in ${parts.length} parts, '
-      '${clock.elapsedMilliseconds}ms after stop, ${recording.language}',
+      '${clock.elapsedMilliseconds}ms after stop',
     );
     final text = dictionary.dictionary.apply(transcript);
     if (text.trim().isEmpty) return {'text': ''};
@@ -160,8 +160,8 @@ class Pipeline {
     try {
       transcription = await whisper.transcribe(
         pcm,
-        // The first part picks the language, and later parts keep it.
-        languages: recording.language == null ? config.languages : [recording.language!],
+        // Each part picks its own language, so a dictation can switch languages at a pause.
+        languages: config.languages,
         prompt: [
           dictionary.dictionary.prompt,
           recording.context,
@@ -176,7 +176,6 @@ class Pipeline {
     }
     final text = transcription.text;
     if (text.isEmpty) return text;
-    if (transcription.language != 'auto') recording.language ??= transcription.language;
     // The end of the text so far, so the next part continues the sentence.
     recording.context = text.substring(max(0, text.length - 200));
     return text;
@@ -226,7 +225,6 @@ class _Recording {
   /// Where the next part starts.
   int partStart = 0;
 
-  String? language;
   String context = '';
 
   void add(Float32List pcm) {

@@ -118,8 +118,8 @@ void main() {
     expect(model.calls, hasLength(1));
     final result = await pipeline.finish(2, tone(3));
     expect(result['text'], 'Primeira parte. segunda parte.');
-    // The second part keeps the first part's language and continues its text.
-    expect(model.calls[1].languages, ['pt']);
+    // The second part picks its own language and continues the first part's text.
+    expect(model.calls[1].languages, ['pt', 'en']);
     expect(model.calls[1].prompt, contains('Primeira parte.'));
     expect(history.items, hasLength(1));
   });
