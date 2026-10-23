@@ -22,14 +22,15 @@ object TextInserter {
      * Pastes through the clipboard, since the field's own paste handles rich editors and web
      * views. Fields that refuse to paste get the text merged in with ACTION_SET_TEXT. The field
      * must still have input focus, so text never lands in a field the user has left. After an
-     * insert the clip is cleared; after a failure the text stays there to paste by hand.
+     * insert the clip is cleared; after a failure, or with no field, the text stays there to
+     * paste by hand.
      */
-    fun insert(context: Context, field: AccessibilityNodeInfo, text: String): Boolean {
+    fun insert(context: Context, field: AccessibilityNodeInfo?, text: String): Boolean {
         val clipboard = context.getSystemService(ClipboardManager::class.java)
         this.clipboard = clipboard
         main.removeCallbacks(clearClip)
-        val inserted = field.refresh() && field.isFocused && field.isEditable && !field.isPassword &&
-            insertAtCursor(clipboard, field, text)
+        val inserted = field != null && field.refresh() && field.isFocused && field.isEditable &&
+            !field.isPassword && insertAtCursor(clipboard, field, text)
         if (inserted) {
             // Web views read the clip after the paste action returns, so the clear waits.
             main.postDelayed(clearClip, CLEAR_DELAY_MS)
@@ -38,6 +39,12 @@ object TextInserter {
         }
         return inserted
     }
+
+    /**
+     * Cancels a pending clear. Android lets only the focused app read the clipboard, so the clear
+     * cannot check that the clip is still ours. Call this when the user may have copied something.
+     */
+    fun keepClip() = main.removeCallbacks(clearClip)
 
     private fun insertAtCursor(clipboard: ClipboardManager, field: AccessibilityNodeInfo, text: String): Boolean {
         val current = currentText(field)

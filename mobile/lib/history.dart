@@ -86,8 +86,9 @@ class HistoryStore extends ChangeNotifier {
 
   Future<void> load() async {
     if (await _file.file.exists()) {
-      final lines = await _file.file.readAsLines();
-      _items = lines
+      final text = await _file.file.readAsString();
+      _items = const LineSplitter()
+          .convert(text)
           .map((line) {
             try {
               return HistoryItem.fromJson(jsonDecode(line));
@@ -99,6 +100,9 @@ class HistoryStore extends ChangeNotifier {
           .toList()
           .reversed
           .toList();
+      // A crash during an append can leave a last line without its newline. The rewrite drops
+      // it, so the next append starts on a new line.
+      if (text.isNotEmpty && !text.endsWith('\n')) return _rewrite();
     }
     notifyListeners();
   }

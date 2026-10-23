@@ -65,6 +65,7 @@ class Bubble(
 
     fun hide() {
         if (!shown) return
+        hideTarget()
         windows.removeView(view)
         shown = false
     }
@@ -175,7 +176,7 @@ class Bubble(
                         removeHint()
                         showTarget()
                     }
-                    if (dragging) {
+                    if (dragging && shown) {
                         params.x = startX + dx.toInt()
                         params.y = startY + dy.toInt()
                         windows.updateViewLayout(view, params)

@@ -31,6 +31,16 @@ void main() {
     expect((await reload()).items.map((item) => item.id), ['2', '1']);
   });
 
+  test('a line cut short by a crash does not spoil the next dictation', () async {
+    final store = await reload();
+    await store.add(_item('1', 100));
+    final file = File('${dir.path}/history.jsonl');
+    await file.writeAsString('{"id": "2", "at', mode: FileMode.append);
+    final again = await reload();
+    await again.add(_item('3', 300));
+    expect((await reload()).items.map((item) => item.id), ['3', '1']);
+  });
+
   test('marks delivery, removes, restores, and clears', () async {
     final store = await reload();
     await store.add(_item('1', 100));

@@ -48,7 +48,18 @@ class DictationService : AccessibilityService(), Bubble.Actions {
         refresh()
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent) = refresh()
+    override fun onAccessibilityEvent(event: AccessibilityEvent) {
+        if (event.packageName?.toString() != packageName && mayCopy(event)) TextInserter.keepClip()
+        refresh()
+    }
+
+    // A copy comes with a tap, a text selection, or a window change. Our own paste only moves
+    // the cursor.
+    private fun mayCopy(event: AccessibilityEvent) = when (event.eventType) {
+        AccessibilityEvent.TYPE_VIEW_CLICKED, AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> true
+        AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED -> event.fromIndex != event.toIndex
+        else -> false
+    }
 
     override fun onInterrupt() = Unit
 
@@ -67,8 +78,9 @@ class DictationService : AccessibilityService(), Bubble.Actions {
         session++
         state = State.IDLE
         field = null
-        prefs.stopListening(prefsListener)
-        bubble.destroy()
+        // The system can unbind the service before it connects.
+        if (::prefs.isInitialized) prefs.stopListening(prefsListener)
+        if (::bubble.isInitialized) bubble.destroy()
         super.onDestroy()
     }
 
@@ -152,6 +164,11 @@ class DictationService : AccessibilityService(), Bubble.Actions {
     private fun stop() {
         val pcm = recorder.stop()
         val mine = session
+        if (recorder.silenced) {
+            say(R.string.microphone_unavailable)
+            finish()
+            return
+        }
         if (pcm.size < Recorder.RATE / 4) {
             say(R.string.too_short)
             finish()
@@ -196,12 +213,12 @@ class DictationService : AccessibilityService(), Bubble.Actions {
     private fun deliver(result: Map<*, *>?) {
         val text = result?.get("text") as? String
         val id = result?.get("id") as? String
-        val target = field
+        val saved = result?.get("saved") != false
         if (text.isNullOrBlank()) {
             say(R.string.nothing_heard)
         } else {
-            val inserted = target != null && TextInserter.insert(this, target, text)
-            if (!inserted) say(R.string.paste_failed)
+            val inserted = TextInserter.insert(this, field, text)
+            if (!inserted) say(if (saved) R.string.paste_failed else R.string.paste_failed_unsaved)
             if (id != null) pipeline.invokeMethod("delivered", mapOf("id" to id, "ok" to inserted))
         }
         finish()

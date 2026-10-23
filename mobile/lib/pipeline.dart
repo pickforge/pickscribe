@@ -51,7 +51,7 @@ class Pipeline {
 
   /// Transcribes [pcm], applies the dictionary, and adds the text to History. Returns the
   /// History id and the text. Dictations run one at a time, in order.
-  Future<Map<String, String>> process(Float32List pcm, {String? app}) {
+  Future<Map<String, Object>> process(Float32List pcm, {String? app}) {
     final job = ++_jobs;
     final result = _queue.then((_) => _run(job, pcm, app));
     _queue = result.then((_) {}, onError: (_) {});
@@ -64,7 +64,7 @@ class Pipeline {
     _whisper?.abort();
   }
 
-  Future<Map<String, String>> _run(int job, Float32List pcm, String? app) async {
+  Future<Map<String, Object>> _run(int job, Float32List pcm, String? app) async {
     if (job <= _cancelledThrough) throw _cancelled();
     final config = settings.settings;
     final model = modelByFile(config.model);
@@ -110,8 +110,9 @@ class Pipeline {
     try {
       await history.add(item);
     } on FileSystemException {
-      // A full disk must not cost the dictation, so the text still goes to the field.
-      return {'text': text};
+      // A full disk must not cost the dictation, so the text still goes to the field. The
+      // bubble must not say that History kept it.
+      return {'id': item.id, 'text': text, 'saved': false};
     }
     return {'id': item.id, 'text': text};
   }

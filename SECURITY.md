@@ -30,7 +30,7 @@ PickScribe sends no telemetry or crash reports. Logs contain errors and timings 
 
 The Android app in `mobile/` records and transcribes on the phone. Only model downloads from Hugging Face leave the phone, and they carry no audio or text. History, the dictionary, and settings stay in the app's private storage, and Android backups exclude them.
 
-- To insert text, the app puts it on the clipboard, pastes it, and clears the clipboard a second later. The clip is marked sensitive, but Android does not enforce that mark. A keyboard's clipboard history or a cross-device clipboard sync, such as Link to Windows, may keep a copy.
+- To insert text, the app puts it on the clipboard and pastes it. On Android 9 and later, it clears the clipboard a second later. It skips the clear when you tap, select text, or switch windows first, because you may have copied something new. The clip is marked sensitive, but Android does not enforce that mark. A keyboard's clipboard history or a cross-device clipboard sync, such as Link to Windows, may keep a copy.
 - When the text cannot be inserted, it stays on the clipboard so you can paste it yourself.
 - Logs hold app names, reasons, and timings, never text.
 

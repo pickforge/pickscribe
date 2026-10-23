@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.Build
 import kotlin.math.sqrt
 
 /** Records 16 kHz mono float audio, the format Whisper takes, into memory only. */
@@ -17,6 +18,13 @@ class Recorder {
     var level = 0f
         private set
 
+    /**
+     * True when the last recording got only silence because a call or another app held the
+     * microphone. From Android 10, the system silences a second recorder instead of refusing it.
+     */
+    var silenced = false
+        private set
+
     // The callers check RECORD_AUDIO before they start a recording.
     @SuppressLint("MissingPermission")
     fun start() {
@@ -26,7 +34,10 @@ class Recorder {
             MediaRecorder.AudioSource.VOICE_RECOGNITION, RATE, CHANNEL, ENCODING,
             maxOf(minimum, CHUNK * Float.SIZE_BYTES * 4),
         )
-        check(audio.state == AudioRecord.STATE_INITIALIZED) { "the microphone is unavailable" }
+        if (audio.state != AudioRecord.STATE_INITIALIZED) {
+            audio.release()
+            error("the microphone is unavailable")
+        }
         synchronized(chunks) { chunks.clear() }
         audio.startRecording()
         if (audio.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
@@ -41,6 +52,8 @@ class Recorder {
     fun stop(): FloatArray {
         val audio = record ?: return FloatArray(0)
         record = null
+        val flagged = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            audio.activeRecordingConfiguration?.isClientSilenced == true
         audio.stop()
         thread?.join()
         thread = null
@@ -54,6 +67,7 @@ class Recorder {
                 offset += chunk.size
             }
             chunks.clear()
+            silenced = flagged && out.all { it == 0f }
             out
         }
     }
