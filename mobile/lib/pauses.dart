@@ -17,6 +17,9 @@ class SpeechLevels {
   static const _pauseFrames = 20;
   static const _padding = 6400;
 
+  // A recording with nothing louder than this is silence, even with no contrast in it.
+  static const _silence = -50.0;
+
   final _levels = <double>[];
 
   /// Measures the complete frames of [audio] that are not measured yet.
@@ -31,13 +34,14 @@ class SpeechLevels {
   }
 
   /// The loudness between silence and speech in this recording, in dB, or null when the two
-  /// are too close to tell apart, as in loud noise or a recording with no pause.
+  /// are too close to tell apart, as in loud noise or a recording with no pause. A quiet
+  /// recording with no contrast is all silence so far.
   double? get threshold {
     if (_levels.length < 33) return null;
     final sorted = [..._levels]..sort();
     final quiet = sorted[sorted.length ~/ 10];
     final loud = sorted[sorted.length * 9 ~/ 10];
-    if (loud - quiet < 15) return null;
+    if (loud - quiet < 15) return loud < _silence ? _silence : null;
     return min(quiet + 12, loud - 10);
   }
 

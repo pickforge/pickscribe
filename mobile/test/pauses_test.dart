@@ -71,6 +71,13 @@ void main() {
     expect(levels.speech(6 * rate, audio.length), isNull);
   });
 
+  test('a quiet recording with no contrast is silence', () {
+    final audio = recording([(8, false)]);
+    final levels = measure(audio);
+    expect(levels.speech(0, audio.length), isNull);
+    expect(levels.cut(0)! / rate, closeTo(6.3, 0.05));
+  });
+
   test('without a clear pause, everything counts as speech', () {
     final audio = recording([(5, true)]);
     final levels = measure(audio);

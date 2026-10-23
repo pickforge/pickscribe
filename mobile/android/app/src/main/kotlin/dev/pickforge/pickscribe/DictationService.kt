@@ -45,6 +45,11 @@ class DictationService : AccessibilityService(), Bubble.Actions {
 
     // Each dictation gets a number, so a result that arrives after a cancel is dropped.
     private var session = 0
+
+    // After a cold start, Dart keeps only the newest message until its pipeline listens. So
+    // nothing else goes out before Dart answers "begin", and the recorder keeps the audio.
+    private var begun = false
+    private var finishWhenBegun: (() -> Unit)? = null
     private var lastVisibility: String? = null
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
         bubble.applyPrefs()
@@ -156,9 +161,29 @@ class DictationService : AccessibilityService(), Bubble.Actions {
         this.raw = raw
         session++
         state = State.LISTENING
+        begun = false
+        finishWhenBegun = null
+        val mine = session
         // The pipeline loads the model now, while the user speaks.
-        pipeline.invokeMethod("begin", mapOf("session" to session))
-        main.postDelayed(streamAudio, STREAM_MS)
+        pipeline.invokeMethod(
+            "begin",
+            mapOf("session" to session),
+            object : MethodChannel.Result {
+                override fun success(result: Any?) {
+                    if (mine != session || state == State.IDLE) return
+                    begun = true
+                    if (state == State.LISTENING) main.post(streamAudio) else finishWhenBegun?.invoke()
+                }
+
+                override fun error(code: String, message: String?, details: Any?) {
+                    if (mine == session) cancel()
+                }
+
+                override fun notImplemented() {
+                    if (mine == session) cancel()
+                }
+            },
+        )
         bubble.view.listening(raw) { recorder.level }
     }
 
@@ -180,25 +205,28 @@ class DictationService : AccessibilityService(), Bubble.Actions {
         state = State.THINKING
         bubble.view.thinking()
         val app = field?.packageName?.toString()
-        pipeline.invokeMethod(
-            "finish",
-            mapOf("session" to session, "pcm" to rest, "raw" to raw, "app" to app),
-            object : MethodChannel.Result {
-                override fun success(result: Any?) {
-                    if (mine == session) deliver(result as? Map<*, *>)
-                }
+        val send = {
+            pipeline.invokeMethod(
+                "finish",
+                mapOf("session" to mine, "pcm" to rest, "raw" to raw, "app" to app),
+                object : MethodChannel.Result {
+                    override fun success(result: Any?) {
+                        if (mine == session) deliver(result as? Map<*, *>)
+                    }
 
-                override fun error(code: String, message: String?, details: Any?) {
-                    if (mine != session) return
-                    say(message ?: code)
-                    finish()
-                }
+                    override fun error(code: String, message: String?, details: Any?) {
+                        if (mine != session) return
+                        say(message ?: code)
+                        finish()
+                    }
 
-                override fun notImplemented() {
-                    if (mine == session) finish()
-                }
-            },
-        )
+                    override fun notImplemented() {
+                        if (mine == session) finish()
+                    }
+                },
+            )
+        }
+        if (begun) send() else finishWhenBegun = send
     }
 
     /** Stops a recording or drops the transcription in progress, without inserting anything. */

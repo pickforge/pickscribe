@@ -133,6 +133,15 @@ void main() {
     expect(model.calls, hasLength(1));
   });
 
+  test('silence before speech is not transcribed', () async {
+    model = FakeModel(['Agora sim.']);
+    pipeline.begin(8);
+    stream(8, Float32List.fromList([...tone(20, loud: false), ...tone(3)]));
+    final result = await pipeline.finish(8, tone(0.2));
+    expect(result['text'], 'Agora sim.');
+    expect(model.calls.single.samples, lessThan(4 * sampleRate));
+  });
+
   test('cancel drops the recording and the part in progress', () async {
     model = FakeModel(['Primeira parte.', 'De novo.'])..gate = Completer();
     pipeline.begin(4);
