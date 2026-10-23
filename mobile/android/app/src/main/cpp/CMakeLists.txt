@@ -11,6 +11,11 @@ FetchContent_Declare(
     whisper
     URL https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v1.8.3.tar.gz
     URL_HASH SHA256=870ba21409cdf66697dc4db15ebdb13bc67037d76c7cc63756c81471d8f1731a
+    # Lets whisper_full reuse the encoding that language detection made, instead of encoding
+    # the same audio twice.
+    PATCH_COMMAND ${CMAKE_COMMAND} -DSOURCE=<SOURCE_DIR>
+        -DPATCH=${CMAKE_CURRENT_SOURCE_DIR}/whisper-reuse-encoding.patch
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/patch-whisper.cmake
 )
 
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)

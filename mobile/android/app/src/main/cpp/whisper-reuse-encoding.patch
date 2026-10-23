@@ -1,0 +1,56 @@
+--- a/src/whisper.cpp
++++ b/src/whisper.cpp
+@@ -920,6 +920,11 @@
+     // [EXPERIMENTAL] speed-up techniques
+     int32_t exp_n_audio_ctx = 0; // 0 - use default
+ 
++    // PickScribe: the mel offset and window of the encoder output held in this state, so
++    // whisper_full can reuse the encoding that language detection made. -1 when the mel changed.
++    int encoded_seek = -1;
++    int encoded_n_ctx = 0;
++
+     whisper_vad_context * vad_context = nullptr;
+ 
+     struct vad_segment_info {
+@@ -2452,7 +2457,12 @@
+     wstate.t_encode_us += ggml_time_us() - t_start_us;
+     wstate.n_encode++;
+ 
+-    return !(abort_callback && abort_callback(abort_callback_data));
++    if (abort_callback && abort_callback(abort_callback_data)) {
++        return false;
++    }
++    wstate.encoded_seek  = mel_offset;
++    wstate.encoded_n_ctx = wstate.exp_n_audio_ctx;
++    return true;
+ }
+ 
+ static struct ggml_cgraph * whisper_build_graph_decoder(
+@@ -3873,6 +3883,7 @@
+ }
+ 
+ int whisper_pcm_to_mel_with_state(struct whisper_context * ctx, struct whisper_state * state, const float * samples, int n_samples, int n_threads) {
++    state->encoded_seek = -1;
+     if (!log_mel_spectrogram(*state, samples, n_samples, WHISPER_SAMPLE_RATE, WHISPER_N_FFT, WHISPER_HOP_LENGTH, ctx->model.filters.n_mel, n_threads, ctx->model.filters, false, state->mel)) {
+         WHISPER_LOG_ERROR("%s: failed to compute mel spectrogram\n", __func__);
+         return -1;
+@@ -3896,6 +3907,7 @@
+         return -1;
+     }
+ 
++    state->encoded_seek  = -1;
+     state->mel.n_len     = n_len;
+     state->mel.n_len_org = n_len;
+     state->mel.n_mel     = n_mel;
+@@ -7016,8 +7028,9 @@
+             }
+         }
+ 
+-        // encode audio features starting at offset seek
+-        if (!whisper_encode_internal(*ctx, *state, seek, params.n_threads, params.abort_callback, params.abort_callback_user_data)) {
++        // encode audio features starting at offset seek, unless the state already holds them
++        const bool encoded = state->encoded_seek == seek && state->encoded_n_ctx == state->exp_n_audio_ctx;
++        if (!encoded && !whisper_encode_internal(*ctx, *state, seek, params.n_threads, params.abort_callback, params.abort_callback_user_data)) {
+             WHISPER_LOG_ERROR("%s: failed to encode\n", __func__);
+             return -6;
+         }

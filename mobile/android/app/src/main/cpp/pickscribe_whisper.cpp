@@ -68,12 +68,10 @@ bool set_window(whisper_context *ctx, whisper_state *state, const float *pcm, in
 }
 
 // Free detection over all languages mislabels short Portuguese clips as Spanish or Galician
-// too often, so only the configured languages compete.
-const char *pick_language(whisper_context *ctx, whisper_state *state, const float *pcm,
-                          int32_t n_samples, const std::vector<std::string> &codes,
-                          int32_t window, int32_t threads) {
-    if (codes.size() == 1) return whisper_lang_str(whisper_lang_id(codes[0].c_str()));
-    if (!set_window(ctx, state, pcm, n_samples, window, threads)) return nullptr;
+// too often, so only the configured languages compete. Expects the clip's mel and window in
+// the state, from set_window.
+const char *pick_language(whisper_context *ctx, whisper_state *state,
+                          const std::vector<std::string> &codes, int32_t threads) {
     if (codes.empty()) return "auto";
     std::vector<float> probabilities(whisper_lang_max_id() + 1, 0.0f);
     if (whisper_lang_auto_detect_with_state(ctx, state, 0, threads, probabilities.data()) < 0) {
@@ -148,8 +146,11 @@ PS_API int32_t ps_transcribe(Model *model, const float *pcm, int32_t n_samples,
     whisper_context *ctx = model->ctx;
     whisper_state *state = model->state;
     const int32_t window = window_for(ctx, n_samples);
-    const char *language =
-        pick_language(ctx, state, pcm, n_samples, split_codes(languages), window, threads);
+    const std::vector<std::string> codes = split_codes(languages);
+    const bool detect = codes.size() != 1;
+    if (detect && !set_window(ctx, state, pcm, n_samples, window, threads)) return 2;
+    const char *language = detect ? pick_language(ctx, state, codes, threads)
+                                  : whisper_lang_str(whisper_lang_id(codes[0].c_str()));
     if (language == nullptr) return 2;
     if (should_abort(model)) return 5;
     whisper_full_params params = whisper_full_default_params(
@@ -172,7 +173,9 @@ PS_API int32_t ps_transcribe(Model *model, const float *pcm, int32_t n_samples,
     params.print_timestamps = false;
     params.abort_callback = should_abort;
     params.abort_callback_user_data = model;
-    if (whisper_full_with_state(ctx, state, params, pcm, n_samples) != 0) {
+    // After detection the state holds the clip's mel and its encoding, and the patched
+    // whisper_full reuses both when it gets no new samples.
+    if (whisper_full_with_state(ctx, state, params, detect ? nullptr : pcm, detect ? 0 : n_samples) != 0) {
         return should_abort(model) ? 5 : 3;
     }
     std::string text;
