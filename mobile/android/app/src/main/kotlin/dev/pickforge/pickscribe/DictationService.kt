@@ -81,6 +81,7 @@ class DictationService : AccessibilityService(), Bubble.Actions {
         session++
         state = State.IDLE
         field = null
+        finishWhenBegun = null
         // The system can unbind the service before it connects.
         if (::prefs.isInitialized) prefs.stopListening(prefsListener)
         if (::bubble.isInitialized) bubble.destroy()
@@ -172,7 +173,9 @@ class DictationService : AccessibilityService(), Bubble.Actions {
                 override fun success(result: Any?) {
                     if (mine != session || state == State.IDLE) return
                     begun = true
-                    if (state == State.LISTENING) main.post(streamAudio) else finishWhenBegun?.invoke()
+                    val send = finishWhenBegun
+                    finishWhenBegun = null
+                    if (state == State.LISTENING) main.post(streamAudio) else send?.invoke()
                 }
 
                 override fun error(code: String, message: String?, details: Any?) {
@@ -263,6 +266,7 @@ class DictationService : AccessibilityService(), Bubble.Actions {
 
     private fun finish() {
         field = null
+        finishWhenBegun = null
         state = State.IDLE
         bubble.view.idle()
         refresh()
