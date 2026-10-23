@@ -44,6 +44,7 @@ class Bubble(
     private val params = overlayParams(sizePx(), sizePx()).apply { gravity = Gravity.TOP or Gravity.START }
     private var shown = false
     private var target: TextView? = null
+    private var longPressCheck: Runnable? = null
     private var menu: View? = null
     private var hint: TextView? = null
     private val hideHint = Runnable { removeHint() }
@@ -65,6 +66,8 @@ class Bubble(
 
     fun hide() {
         if (!shown) return
+        // A removed view gets no ACTION_UP, so a pending long press must not outlive it.
+        longPressCheck?.let(view::removeCallbacks)
         hideTarget()
         windows.removeView(view)
         shown = false
@@ -152,12 +155,12 @@ class Bubble(
         var dragging = false
         var pressedLong = false
         val longPressCheck = Runnable {
-            // A hidden bubble gets no ACTION_UP, so the check can outlive the press.
             if (!shown) return@Runnable
             pressedLong = true
             view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
             actions.onLongPress()
         }
+        this.longPressCheck = longPressCheck
         view.setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
