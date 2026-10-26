@@ -17,6 +17,7 @@ then reset this file.
 - On Omarchy, the capsule follows the theme colors, and a bar widget shows the state, history, and dictionary.
 - Cleanup effort is configurable and defaults to `low`. The HTTPS connection opens while you speak.
 - Cleanup rewrites a dictated question instead of answering it. If the model answers anyway, the raw text is pasted.
+- An Android app in `mobile/` shows a dictation bubble over text fields and transcribes on the phone. It has no AI cleanup and no published release yet.
 
 ## Internal/release changes
 

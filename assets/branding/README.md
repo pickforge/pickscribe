@@ -11,7 +11,7 @@ These files are exported from `branding-visual/assets/pickscribe/`.
 - `pickscribe-mark-128.svg`, `pickscribe-mark-light.svg`, and `pickscribe-mark-mono.svg` are the canonical mark variants.
 - `pickscribe-app-icon.svg` plus `pickscribe-app-icon-{32,64,128,256,512,1024}.png` are package/app icon exports.
 - `pickscribe-favicon.svg`, `pickscribe-favicon-{16,32}.png`, and `pickscribe-favicon.ico` are browser/favicon exports.
-- `pickscribe-tray.svg`, `pickscribe-tray-idle.svg`, `pickscribe-tray-recording.svg`, and matching PNG files are tray icon states.
+- `pickscribe-tray.svg`, `pickscribe-tray-idle.svg`, `pickscribe-tray-recording.svg`, and matching PNG files are tray icon states from the old desktop app. The daemon has no tray.
 - `pickscribe-wordmark.svg`, `pickscribe-lockup-horizontal.svg`, and `pickscribe-lockup-stacked.svg` are lockups for docs and marketing.
 - `pickscribe-og-image.png` and `pickscribe-hero-art.png` are raster marketing/social exports.
 

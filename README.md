@@ -4,7 +4,7 @@
 
 # PickScribe
 
-Dictation for Linux. Tap Right Alt, speak, and tap it again. PickScribe transcribes your speech on your own GPU, cleans the text with Claude, and pastes it into the app you are using.
+Dictation for Linux. Tap Right Alt, speak, and tap it again. PickScribe transcribes your speech on your own GPU, cleans the text with Claude, and pastes it into the app you are using. An [Android app](#android) is in development.
 
 A small capsule floats at the bottom of the screen while you dictate. It shows the sound waves while it listens and a moving pulse while it thinks. It never takes keyboard focus, and clicks pass through it.
 
@@ -112,6 +112,19 @@ PickScribe keeps your recent dictations, so text is not lost when no text field 
 
 On Omarchy, `scripts/install` also installs a bar widget. Enable it once with `omarchy plugin enable pickforge.pickscribe`. The icon shows whether PickScribe is listening or thinking. Its panel holds the history, the dictionary, the suggested corrections, and the timings of recent dictations.
 
+## Android
+
+The Android app in `mobile/` shows a bubble over the text field you type in. Tap the bubble, speak, and tap it again. Whisper transcribes on the phone, and the text goes in at the cursor. The app has no AI cleanup yet. Drag the bubble onto the X to snooze it or hide it in one app. Password fields never show it.
+
+The app has no release yet. To try it, set up the Android SDK with the NDK and [fvm](https://fvm.app), connect a phone, and run:
+
+```bash
+cd mobile
+fvm flutter run --release
+```
+
+The setup screen asks for the microphone, the accessibility service that draws the bubble, and a Whisper model to download.
+
 ## Commands
 
 ```bash
@@ -141,6 +154,14 @@ The Android app in `mobile/` keeps audio and text on the phone. It pastes throug
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
+```
+
+For the Android app, in `mobile/`:
+
+```bash
+fvm dart format --output=none --set-exit-if-changed .
+fvm flutter analyze
+fvm flutter test
 ```
 
 ## License
