@@ -1,6 +1,6 @@
 # Security policy
 
-PickScribe is a Linux dictation daemon. It records your microphone while you dictate, transcribes the audio locally with Whisper, optionally cleans the transcript with Claude, and pastes the result into the focused app.
+PickScribe is a Linux dictation daemon with an Android app in development. The daemon records your microphone while you dictate, transcribes the audio locally with Whisper, optionally cleans the transcript with Claude, and pastes the result into the focused app.
 
 ## What leaves the machine, and when
 
